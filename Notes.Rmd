@@ -41,14 +41,16 @@ Focus of this book is on chi-square type distances, $\phi$-divegrences, $f$-dive
 
 \subsubsection{The Distances in Discrete Models}
 
-Let's say your goal is to estimate the parameter $\theta$ efficiently and robustly, by determining the element of the model family which provides the closest match to the data in terms of the distance. This is akin to quantifying the sepeartion between two vectors that sum to 1.
+Let's say your goal is to estimate the parameter $\theta$ efficiently and robustly, by determining the element of the model family which provides the closest match to the data in terms of the distance. This is akin to quantifying the separation between two probability vectors that sum to 1. One way to quantify this separation is through the class of disparities; see also Csiszar and Ali and Silvey (pg 27).
 
 \begin{definition}
 Let C be a thrice differentiable, strictly convex function on [-1, $\infty$] satisfying $C(0)=0$. Let the Pearson residual at the value X be defined by $$\delta(x)=\frac{d_n(x)}{f_\theta(x)}-1$$.
 Then the **disparity** between vector $\vec{d}$ and $\vec{f_\theta}$ is: $$\rho_C(d_n, f_\theta)=\sum_{x=0}^{\infty}C(\delta(x))f_\theta(x)$$
 \end{definition}
 
-Jensen's inequality shows that the disparity is nonzero and that it only equals 0 when the two vectors are euqal.
+Thrice differentiability and convexity are the disparity conditions. $\rho_C(d_n, f_\theta)$ is a general way of writing a distance satisyfing the disparity conditions. $C$ is the disparity generating function.
+
+Jensen's inequality shows that the disparity is nonzero and that it only equals 0 when the two vectors are equal. Therefore this disparity meets the minimum requirements for a statistical distance.
 
 Specific forms of the function $C$ generate many well known disparities. For example:
 
@@ -58,9 +60,23 @@ Specific forms of the function $C$ generate many well known disparities. For exa
 4. $C(\delta)=\delta-log(\delta+1)$ yields the **Pearson's chi-square (PCS)**
 5. $C(\delta)=\frac{\delta^2}{2}$ yields the **Neyman's chi-square (NCS)**.
 
-There are several important families of disparities. The *Cressie-Read* family of power divergences is indexed by a real tuning parameter $\lambda$ where different values of lambda retyurn PCS, LD, HD, KLD, NCS respectively.
+\subsubsection{Power divergences}
 
-Other subfamilies include the blended weight Hellinger distance, blended weight chi-square divergence, negative exponential disparities, generalized KL divergence
+There are several important subfamilies of disparities. The *Cressie-Read* family of power divergences is indexed by a real tuning parameter $\lambda$ and formulated as follows:
+
+$$PD_\lambda(d_n, f_\theta)=\frac{1}{\lambda(\lambda+1)}\sum d_n \bigg [ \bigg(\frac{d_n}{f_\theta}\bigg)^\lambda -1\bigg]$$
+Different choices of lambda yield common statistical distances/divergences.
+
+We can reparametrize this formula s.t. $\alpha=-(1+2\lambda)$:
+
+$$PD_\alpha^*(d_n, f_\theta)=\frac{4}{1-\alpha^2}\sum_x d_n \bigg [-1 \bigg(\frac{f_\theta}{d_n}\bigg)^{(1+\alpha)/2}\bigg]$$.
+
+This formulation is symmetric about $\alpha=0$ (which corresponds to the hellinger distance). Distances corresponding to $\alpha$ and $-\alpha$ are adjoints of one another.
+
+It can also be reformulated to be nonnegative and convex, leading to some important asymptotic properties. This means that $C$ is standardized (centered and scaled) s.t. $C'=0$ and $C''=0$. This has no effect on the parameter that minimizes the divergence.
+
+\subsubsection{Other families}
+Other subfamilies include the blended weight Hellinger distance, blended weight chi-square divergence, negative exponential disparities, generalized KL divergence.
 
 \begin{lemma}
 Suppose that C(-1) and C'($\infty$) are finite. Then the disparity $\rho_C(g,f)$ is bounded above by $C(-1)+C'(\infty)$
@@ -75,11 +91,224 @@ $$B(d_n, f_\theta)=-log \left( \sum_x d_n^{1/2} f_\theta^{1/2} \right)$$
 
 This is the Bhattacharyya coefficient, which can be thought of as the approximate overlap between two probability densities.
 
-Bhattacharyya's distacne may be looked at as a special case of the **Rényi divergence**: $$RD_r(d_n, f_\theta)=\frac{1}{r(r-1)}log \left( \sum_x d_n^r(x)f^{1-r}_\theta(x) \right), r \neq 0,1$$
+\subsubsection{Renyi divergence}
+
+Bhattacharyya's distance may be looked at as a special case of the **Rényi divergence**: $$RD_r(d_n, f_\theta)=\frac{1}{r(r-1)}log \left( \sum_x d_n^r(x)f^{1-r}_\theta(x) \right), r \neq 0,1$$
 
 When $r=0$ we get the LD (Likelihood disparity). When $r=1$ we get the KLD.
 
 Stopped at page 14. Will resume tomorrow.
+
+\subsection{Minimum distance estimator}
+
+Maximizing the likelihood is equivalent to minimizing the likelihood disparity $\sum d_n log(d_n/f_\theta)$. Thus the class of minimum distance estimators includes the maximum likelihood estimator under discrete models. To idenify the mimimum distance estimator, we take a derivative of sorts wrt $\theta$.
+
+$$-\nabla \rho_C(d_n, f_\theta)=\sum (C'(\delta)(\delta+1)-C(\delta))\nabla f_\theta =0$$
+or 
+
+\begin{equation}
+  \label{eq:1}
+  -\nabla \rho_C(d_n, f_\theta)=\sum A(\delta) \nabla f_\theta =0
+\end{equation} 
+
+Where $A$ is called the residual adjustment factor (RAF) (has value and derivative at 0 standardized to certain values).
+
+Estimating equations differ only based on the formula for the RAF.
+
+Suppose we want to robustly estimate our parameter $\theta$. Our aim is to downweight observations having large positive values of $\delta$ (the Pearson residual, because thse correspond to large outliers in relation to our parametric model). This is achieved by such disparities for whch the RAF exhibits a severely dampening response to increasing $\delta$ (pg 36).
+
+![Delta dampening (robust estimation) for different RAF corresponding to different divergences](./Images for notes/delta dampening mindistappr.png)
+
+HD, KLD, NCS all downweight large $\delta$ relative to the LD. PCS magnifies the effect of outliers.
+
+When we expand out \ref{eq:1} using a Taylor series, we see that $A''(0)$ plays a major role in determining the estimators properties.
+
+Proper controlling of inliers (negative value of $\delta$) need to be shrunk as well, for good small sample efficiency.
+
+\subsection{The Robustified Likelihood Disparity}
+
+Minimum distance technique is based on two things $C$, the disparity generating function, and $A$, the residual adjustment function (RAF). We usually start with $C$, take the derivative wrt the parameter and suitably standardize it to get the RAF.
+
+We can do this in reverse: define RAF with right properties and then construct the distance. The \textbf{disparity generating function} is defined as follows:
+
+\begin{equation}
+  \label{eq:2}
+  C(\delta)=\int_0^\delta \int_0^t A'(s) (1+s)^{-1} dsdt
+\end{equation} 
+
+Most mimimum distance estimators qualities are governed by smothness and derivative magnitudes at $\delta=0$ for the RAF. 
+
+The \textbf{robustified likelihood disparity} acts like the likelihood equations around $\delta=0$ but powerfully downweights outliers in the way that the RAF is defined.
+
+\begin{equation}
+A_{\alpha, \alpha^*}(\delta)=
+  \begin{cases}
+  \alpha & \text{for } -1 \leq \delta \leq \alpha \\
+  \delta & \text{for } \alpha < \delta < \alpha^* \\
+  \alpha^* & \text{for } \delta \geq \alpha^*
+  \end{cases}
+\end{equation}
+
+The corresponding disparity generating function (or the \textbf{robustified likelihood disparity} with tuning paramaters $\alpha$ and $\alpha^*$) is:
+
+\begin{equation}
+C_{\alpha, \alpha^*}(\delta)=
+  \begin{cases}
+  (\delta+1)\log(\alpha+1)-\alpha & \text{for } -1 \leq \delta \leq \alpha \\
+  (\delta+1)\log(\delta+1)-\delta & \text{for } \alpha < \delta < \alpha^* \\
+  (\delta+1)\log(\alpha^*+1)-\alpha^* & \text{for } \delta \geq \alpha^*
+  \end{cases}
+\end{equation}
+
+\subsection{$\phi$-Divergences (F-divergences)}
+
+Given two densities $d_n$ and $f_\theta$, the $\phi$-divergence measure between these two distributions is: $$D_\phi(d_n, f_\theta)=\sum_{x=0}^{\infty} \bigg( \frac{d_n(x)}{f_\theta(x)}\bigg) f_\theta(x)$$
+
+Where $\phi$ is convex function defined on all nonnegative real values, s.t. $\phi(1)=0$ and a couple other conditions. Establishing asymptotic properties will require $\phi$ to be thrice differentiable.
+
+Given any function $\phi$ we can adjust it to guarantee some useful properties.
+
+The Bhattacharyya distance, the family of Rényi divergences, and the family of Sharma and Mittal divergences belong to the class of $(h, \phi)$ divergences, which require a function $h$, real, increasing, and differentiable.
+
+\subsection{Example Drosophila Recessive Lethal Counts}
+
+For the full gist, visit page 67 of the text. But various disparities were used to estimate the parameter for a Poisson distribution fit to recessive lethal counts of drosophila progeny after the male was exposed to some chemical. Here were the takeaways:
+1. The difference between the MLE nad the outlier deleted maximum likelihood was substantial
+2. PCS was influenced the most my outliers, and to a lesser extent $BWHD_{1/3}$ was too.
+3. All other estimates based on other disparities withstood the effect of the outliers.
+
+\section{On Measures of Entropy and Information}
+
+By Alfred Renyi (@Renyi1960).
+
+\subsection{Characterization of Shannon's measure of entropy}
+
+Let $P=(p_1, ..., p_n)$ be a finite discrete probability distribution. The amount of uncertainty of the distribution (amount of uncertainty concerning the outcome of an experiment) is the *entropy* of the distribution and is usually measured by the $\textbf{Shannon entropy}$:
+$$H(p_1, ..., p_n)=\sum_{k=1}^n p_k \log_2 \frac{1}{p_k}$$
+
+H has the following properties
+1. $H(p_1, ..., p_n)$ is symmetric of its variables for $n=2,3,...$
+2. $H(p, 1-p)$ is a continous function of p
+3. $H(0.5, 0.5)=1$
+4. $H(tp_1, (1-t)p_1, p_2, ... p_n)=H(p_1, ..., p_n) + p_1H(t, 1-t)$
+
+Entropy is additive: $H(P*Q)=H(P)+H(Q)$ when $P,Q$ are two discrete probability distributions and $P*Q$ is the direct product of the two distributions.
+
+Many other quantitaties satisfy 1,2,3 and the additive entropy property. For example, \textbf{Renyi's entropy} or \textbf{entropy of order $\alpha$}:
+
+$$H_\alpha[P]=H_\alpha(p_1, ..., p_n)=\frac{1}{1-\alpha} \log_2 \bigg( \sum_{k=1}^n p_k^\alpha \bigg)$$
+where $\alpha>0$ and $\alpha \neq 1$.
+
+Shannon entropy is the limiting case for $\alpha \rightarrow 1$
+
+\subsection{Characterization of Shannon's entropy of generalized probability distributions}
+
+Let $[\Omega, \beta, P]$ be a probability space where $\Omega$ is an arbitrary set (set of elementary events, $P(\Omega)=1$), $B$ is a collections of subsets of $\Omega$ containing all of $\Omega$, the elements of $\beta$ being called events, and P a probability measure. Call $\xi=\xi(\omega)$ a function where $\omega \in \Omega_1$ and where $\Omega_1 \in \beta$. $xi$ is measureable wrt $\beta$ a generalized random variable.
+
+A generalized probability distribution describes the distribution of agneralized random variable.
+
+A finite discrete generalized probability distribution is a sequence $p_1, ..., p_n$ s.t. $W(P)=\sum_{k=1}^n p_k$ where $W(P)$ is the weight of the distribution, bounded below by 0 and above by 1.
+
+Entripy of $H[P]$ (of order 1, i.e. Shannon) has symmetric, continuity, mean value properties.
+Mean value propery statses that the entropy of two incomplete distributions (weight doesn't sum to 1), is the weighted mean value of the entropies of the two distributions, where the entropy of each component is weighted with its own weight. Then he defines the entropy of order $\alpha$ for generalized distributions.
+
+\subsection{Characterization of the amount of information $I(Q|P)$: i.e. Rényi Divergence}
+
+The entropy of a probability distribution can be interpreted not only as a measure of uncertainty but also as a measure of information.
+
+Renyi defines the \textbf{information of order $\alpha$ obtained if the distribution $P$ is replaed by the distribution $Q$} as:
+$$I_\alpha(Q|P)=\frac{1}{\alpha-1} \log_2 \bigg( \sum_{k=1}^n \frac{q_k^\alpha}{p_k^{\alpha-1}}\bigg)$$.
+
+This is also called the \textbf{Rényi divergence}. It has some of the following properties:
+
+1. $I(Q,P)$ is unchanged if you rearranged the elements of the probability provided the 1-1 correspondence between elements still holds.
+2. If $P=(p_1, ..., p_n)$ and $Q=(q_1, ..., q_n)$ and $p_k \leq q_k$ for all $k=1,2,...,n$, then $I(Q|P) \geq 0$.
+If $p_k \geq q_k$ for all $k=1,2,...,n$, $I(Q|P) \leq 0$.
+3. If $I(Q_1, P_1)$ and $I(Q_2, P_2)$ are defined, and if $P=P_1 * P_2$ and $Q=Q_1 * Q_2$, and correspondences between elements holds: $$I(Q|P)=I(Q_1|P_1)+I(Q_2|P_2)$$
+
+\section{MIC: Mutual Information Based Hierarchical Clustering}
+
+MIC algorithm uses mutual information as a similarity measure and exploits its grouping property $MI(X,Y,Z)=MI(X,Y)+MI(Z, XY)$. MIC in Shannon (probabilitistic version) where objects are probability distributions (represent by random samples).
+
+Cluster analysis either partitions data into non-overlapping clusters or as a hierarchy of nested partitions (HC). They focus on agglomerative hierarchical clustering, where clusters are built by joining the most obvious elements into pairs and then building larger and larger objects. 
+
+**Proximity measure** is the crucial choice in clustering algs. Proximity measure can be a measure of similarity or dissimilarity. If dissimilarity, it is convenient (but not obligatory), if the measure is a metric (positive, symmetric, triangle inequality). We generate a **proximity matrix**.
+
+Once we have the proximity matrix, there are different ways to group genes. You can either calculate proximities between clusters from the proximities of their constituents, OR calculate the proximity at each iteration. 
+
+For ultrametric distances, the natural method of joining is UPGMA (unweighted pair group method with arithmetic mean). UPGMA works like so: the distance between any two clusters of size $|A|$ and $|B|$ is taken to be the average of all distances $d(x,y)$ between pairs of objects in A and B. At each clustering step, the updated distance between the joined clusters $A \cup B$ and a new cluster $X$ is given by the proportion averaging of the $d_{A,X}$ and $d_{B,X}$ distances:
+$$d_{(A \cup B),X}=\frac{|A| d_{A,X} + |B| d_{B,X}}{|A|+|B|}$$
+UPGMA requires constant rate assumption (produced dendrogram, distances between the root to every branch tip are equal). There exists an WPGMA method which produces a weighted result (distances contribute differently to the average).
+
+For distances that satisfy the four-point condition, you can use neighbor joining. Takes a distance matrix, calculates a $Q$ matrix (takes distance bewteen taxa $i$ and $j$ and subtracts the sum of the distances from $i$ to every other taxa and $j$ to every other taxa), finds pairs of distinct taxa for which $Q(i,j)$ is minimized and join them to a new node, calculate the distance from each outisde taxa to the new node, and start the algorithm again. Fast, computationally efficient, if input distance matrix is correct output will be correct, does not assume lineages evolve at the same rate, but has been replaced by phylogenetic methods that do not rely on distance measures.
+
+Objects that can be clustered can either be single (finite) patterns or random variables, pdfs. Mutual information can be used for measuring similarity between finite objects or random variables, depdending on whether you view it from an algoritmic (Kolmogorov) or probabilistic (Shannon) perspective. 
+
+This property, $MI(X,Y,Z)=MI(X,Y)+MI(Z, XY)$, **which suggests that MI can be decomposed into hierarchical levels** also suggests a grouping application. Since X, Y, and Z are composite, they can be used recursively for cluster decomposition of MI. Thus, MI treats clusters as individual objects exacty.
+
+Their cluster scheme:
+
+1. Compute proximity matrix based on pairwise mutual information: assign n clsuters so each cluster gets one object.
+2. Find the two closest clusters
+3. Create a new clusetr by combining the two closest
+4. Delete the indices for the previous nodes from the proximity matrix, and add a node containing the proximities between the new cluster and all other clusters.
+5. Repeat
+
+\subsection{Mutual Information}
+
+\subsubsection{Shannon Theory}
+
+Say you have two random variables X and Y. If they are discrete, we write the $p_i(X)=prob(X=x_i)$, $p_i(Y)=prob(Y=x_i)$, and $p_{ij}(X)=prob(X=x_i, Y=y_i)$. Entropies are defined in the discrete case by $H(X)=-\sum_i p_i(X) \log p_i(X)$ and analogously for Y. $H(X,Y)=-\sum_{i,j} p_{i,j}\log p_{i,j}$. Condition entropies are $H(X|Y)=H(X,Y)-H(Y)=-\sum_{i,j} p_{i,j}\log p_{i|j}$. The base of log determines how the information is measured (base 2 in bits). The mutual information is defined as:
+$$I(X,Y)=H(X)+H(Y)-H(X,Y)$$
+Mutual information is non-negative and is only zero when X and Y are independent. 
+
+\subsubsection{Estimating Mutual Shannon Information}
+
+Easier when your variables are discrete, since your probabilities $p_i, p_{i,j}$ is approximated by the ratio $n_i/N$. This is more difficult when the variables are continuous. They use K-nearest Neighbors estimators.
+
+\subsubsection{Algorithmic Information Theory}
+
+In Shannon Theory, the basic objects are random variables. Algorithmic infomormation theory deals with individual symbol string. To specify a sequence $X$ means to give the necessary input to a universal computer such that U prints X as its ouput. The analog to entropy, *complexity* $K(X)$ is the minimal length of any input which leads to the output X.
+E.g. concatenating two strings X, Y has complexity $K(XY)$ because $K(XY)>K(X)$ but cannot be larger than $K(X)+K(Y)$. One can also show that
+$$0 \leq K(X|Y) \approx K(XY)-K(Y) \leq K(X)$$
+
+**The algorithmic information in Y and X** is:
+$$I_{alg}(X,Y)=K(X)-K(X|Y) \approx K(X) + K(Y) - K(XY)$$
+\subsubsection{Mutual Information Based Distance Measures}
+
+Mutual information is itself a similarity measure. We also want the distance measure to be unbiased by the size of the clusters. Two metrics that form different distance measures (metrics) that are normalized are as follows:
+
+\begin{theorem}
+The quantity
+$$D(X,Y)=1-\frac{I(X,Y)}{H(X,Y)}=\frac{d(X,Y)}{H(X,Y)}$$ 
+is a distance metric with $D(X,X)=0$ and $D(X,Y) \leq 1$ for all pairs.
+\end{theorem}
+
+\begin{theorem}
+The quantity
+$$D'(X,Y)=1-\frac{I(X,Y)}{\textrm{max}(H(X), H(Y))}=\frac{\textrm{max}(H(X|Y), H(Y|X))}{\textrm{max}(H(X), H(Y))}$$ 
+is a distance metric with $D(X,X)=0$ and $D(X,Y) \leq 1$ for all pairs. It is sharper than $D$, i.e. $D'(X,Y) \leq D(X,Y)$
+\end{theorem}
+
+They chose D, although it may not always be preferable to $D'$.
+
+\subsubsection{Mitochondrial DNA and Phylogenetic Tree for Mammals}
+
+Too the algorithmic approach to information theory, where informations were estimated by lossless data compression. The proximity matrix derived from the MI estimates was used as input to a standard HC algorithm (neighbor-joining and hypercleaning). Use MIC algorithm above, with distance $D(X,Y)$. The joining of the two clusters was obtained by concatenating the two DNA sequences.
+
+Dividing the mutual information by the total information was critical for success. The algorithm would've been completely screwed up, since after the first cluster formation, longer sequences would tend to have larger MI.
+
+\subsection{Major Takeaways}
+
+MI can be used as a proximinity measure, but also syggests a conceptually very simple and natural hierarchical clustering algorithm. They don't claim that MIC is superior. There are two versions of infomration theory, algorithmic and probabilistic. Normalizing MI properly was crucial, such that relative MI was used as proximity measure. In the probabilistic version, one studies the clustering of probability distributions *usually given implicity by finite random samples). The full power of algorithmic information theory is only reached for really long sequences. (@Kraskov2009)
+
+\section{More reading}
+Cressie and Reed family of power divergence
+Pardo 2006
+Csiszar (1963, 1967 ab)
+Sharma and Mittal 1977
+Ali and Silvey (1966)
+Rényi, 1961; Leise and Vajda, 1987
 
 # References
 

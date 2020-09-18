@@ -1,0 +1,73 @@
+---
+title: "Visualizing genes"
+author: "Ethan Ashby"
+date: "9/18/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+library(tidyverse)
+library(variantprobs)
+library(data.table)
+library(ggbiplot)
+```
+
+```{r }
+data(tcga)
+tcga_v_f <- tcga[
+  # filter out all hypermutated tumors
+  # & tumors with unknown cancer
+  MS == "Non-hypermutated" & !is.na(Cancer_Code),
+  ][
+    ,
+    # number of tumors per cancer type
+    n_tumor := length(unique(patient_id)),
+    by = Cancer_Code
+    ][,
+      # variant frequencies by gene, cancer type
+      # also save n_tumor per cancer
+      .(v_f = length(unique(patient_id)),
+        n_tumor = n_tumor[1]),
+      by = .(Variant, Hugo_Symbol, Cancer_Code)
+      ]
+
+probs<-suppressWarnings(tcga_v_f[,
+                                                         # Calculate Good Turing probabilities of
+                                                         # at least one new variants per CLUSTER & cancer type
+                                                         {
+                                                           GT_probs <- goodturing_probs(
+                                                             counts = v_f,
+                                                             m = n_tumor[1]
+                                                           )
+                                                           .(p_atleast_1new = GT_probs['atleast_1new'])
+                                                         },
+                                                         by = .(Hugo_Symbol, Cancer_Code)
+                                                         ] 
+                                                %>%
+                                                    dcast(
+                                                        Hugo_Symbol ~ Cancer_Code,
+                                                        value.var = "p_atleast_1new",
+                                                        fill = 1 - exp(- 1/(length(unique(tcga$patient_id)) + 1))
+                                                           ) %>%
+                                                  magrittr::set_rownames(.$Hugo_Symbol) %>%
+                                                  .[, Hugo_Symbol := NULL] %>%
+                                                  data.matrix()))
+
+tmp<-probs %>% pivot_wider(names_from="Cancer_Code", values_from="p_atleast_1new")
+
+tmp[is.na(tmp)]<-0
+
+mutfreqs.pca<-prcomp(tmp[,2:33], center=TRUE, scale=TRUE)
+
+ggbiplot(mutfreqs.pca, var.axes=TRUE)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
