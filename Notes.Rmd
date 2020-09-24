@@ -13,6 +13,7 @@ header_includes:
 - \usepackage{amsmath}
 - \usepackage{amssymb}
 - \usepackage{amsthm}
+- \usepackage{mathds}
 ---
 
 \newtheorem{definition}{Definition}
@@ -145,7 +146,7 @@ A_{\alpha, \alpha^*}(\delta)=
   \begin{cases}
   \alpha & \text{for } -1 \leq \delta \leq \alpha \\
   \delta & \text{for } \alpha < \delta < \alpha^* \\
-  \alpha^* & \text{for } \delta \geq \alpha^*
+  \alpha^* & \text{for } \delta \geq \alpha^* \\
   \end{cases}
 \end{equation}
 
@@ -156,7 +157,7 @@ C_{\alpha, \alpha^*}(\delta)=
   \begin{cases}
   (\delta+1)\log(\alpha+1)-\alpha & \text{for } -1 \leq \delta \leq \alpha \\
   (\delta+1)\log(\delta+1)-\delta & \text{for } \alpha < \delta < \alpha^* \\
-  (\delta+1)\log(\alpha^*+1)-\alpha^* & \text{for } \delta \geq \alpha^*
+  (\delta+1)\log(\alpha^*+1)-\alpha^* & \text{for } \delta \geq \alpha^* \\
   \end{cases}
 \end{equation}
 
@@ -301,6 +302,114 @@ Dividing the mutual information by the total information was critical for succes
 \subsection{Major Takeaways}
 
 MI can be used as a proximinity measure, but also syggests a conceptually very simple and natural hierarchical clustering algorithm. They don't claim that MIC is superior. There are two versions of infomration theory, algorithmic and probabilistic. Normalizing MI properly was crucial, such that relative MI was used as proximity measure. In the probabilistic version, one studies the clustering of probability distributions *usually given implicity by finite random samples). The full power of algorithmic information theory is only reached for really long sequences. (@Kraskov2009)
+
+\section{On Divergences and Informations in Statistics and Information Theory}
+(@Liese2006)
+
+\subsection{Introduction}
+
+Shannon and Kullblack Leibler developed some informations based on divergences. Rényi introduced f-divergences in the same paper that he introduced Rényi entropy, and showed that the divergences decrease during markov processes.
+
+Csiszar, Morimoto, and Ali-Spivey all studied these divergences more fully. It can be helpful to think of the divergence as an average, weighted by a function $f$ of the odds ratio given by P and Q.
+
+\begin{definition}
+Let I be an interval on the real line. A function f is absolutely continuous if for every positive $\epsilon$, there exists a positive $delta$ s.t. when you have a finite sequence of disjoint subintervals $(x_k, y_k)$ on I, if $\sum_k (y_k-x_k) < \delta$, then
+$$\sum_k |f(y_k)-f(x_k)| < \epsilon$$
+\end{definition}
+
+If $P$ and $Q$ are absolutely continous wrt a reference distribution $\mu$ then $dP= p d\mu$ and $dQ=q d\mu$. Thus the f-divergence can be written as:
+
+$$D_f(P || Q)=\int_\Omega f(\frac{p(x)}{q(x)}q(x) d\mu(x)$$
+
+If $f(t)=t\textrm{ln}(t)$, the f divergence becomes the K-L divergence.
+
+Choosing different f's can give you the Hellinger distance,  Bhattacharyya distance, total variation, Pearson CS divergence, or likelihodo ratio cumulants.
+
+In this article, the authors derive the properties of the f-divergences using the generalized Taylor formula, rather than Jensen inequalities. They also show that the Shannon information is just an f-divergence. The Shannon divergence is shown to be the limit as $\alpha \rightarrow 1$ of the Arimoto divergences. The square roots of the Arimoto divergences are metrics. The limits of the arimoto divergences $\alpha \rightarrow 0$ are the prior and posterior Bayes error. They also represent f-divergences as the average statistical information.
+
+\subsection{Divergences}
+
+Let $P,Q$ be probability measures (CDFs) on a measurable space, and suppose that they are dominated by a $\sigma$-finite measure $\mu$ with densities $p=\frac{dP}{d\mu}$ and $q=\frac{dQ}{d\mu}$.
+
+Csiszar defined the f-divergence as:
+$$D_f(P,Q)=\int f\bigg( \frac{dP}{dQ}\bigg) dQ$$
+Where $$0 f(\frac{p}{0})=p \lim_{n \rightarrow \infty} \frac{f(t)}{t} \textrm{   for p>0   and} 0 f(\frac{0}{0})=0$$
+to ensure continuity and dealing with the point $p,q=0$ an d suppress the influence of events with zero probabilities.
+
+The functions $f_{(1)} = t\ln t$, $f_{(2)} = (t-1)^2$, $f_{(3)} = (\sqrt{t}-1)^2$, $f_{(4)} = |t-1|$ yield the Kullblack-Liebler Divergence, the Pearson Divergence, Hellinger distance, and total variation.
+
+Csiszar proved the important reflexivity property $D_f(P,Q)=0 \textrm{ iff } P=Q$.
+
+Reflexivity:
+\begin{theorem}
+if $f$ is a convex function, $D_{f^*}(P,Q)=D_f(Q,P)$. Therefore the $(f+f^*)$-divergence is symmetric in P,Q where $f$ and $f*$ are adjoints. If $f=f*$ then the divergence is symmetric.
+\end{theorem}
+
+We can also define the divergence of $f_\alpha$ as:
+
+\begin{equation}
+D_{f_\alpha}(P,Q)=
+\begin{cases}
+  I(P,Q) & \textrm{if } \alpha=1 \\
+  \frac{1}{\alpha(\alpha-1)} (\int p^\alpha q^{1-\alpha} d\mu -1) & \textrm{if } \alpha \neq 0,1 \\
+  I(Q,P) & \textrm{if } \alpha=0 \\
+\end{cases}
+\end{equation}
+
+In addition to including the information divergences, $\alpha=2$ yields 1/2 the pearson divergence. $\alpha=1/2$ yields 2* the squared hellinger distance, the only symmetric divergence in this class.
+
+\subsection{Divergences and Shannon Information}
+
+The Shannon information is a divergence where the weighting of P,Q are fixed.
+
+The equality $I(X;Y)=I_\pi(P,Q)$ which motivates us to call the $I_\pi(P,Q)$ for $\pi \in (0,1)$ the *Shannon Divergences*.
+
+The authors then introduce the *Arimoto informations* (built off Arimoto entropies) which are natural extensions of the Shannon informations (limit as alpha approaches 1). These are just generalizations of Shannon informations to include 
+
+Arimoto entropy: $H_\alpha(Y)=h_\alpha(\pi)=\frac{1}{1-\alpha}(1-[\pi^{1/\alpha}+(1-\pi)^1/\alpha]^\alpha)$
+
+Arimoto information
+$I_\alpha(X;Y_=H_\alpha(Y)-H_\alpha(Y|X)$
+
+Arimoto divergence:
+$I_{\pi, \alpha}(P,Q)=D_{f_\pi,\alpha}(P,Q)=\frac{1}{1-\alpha}\bigg(\int[(\pi p)^{1/\alpha}+((1-\pi)q)^{1-\alpha}]^\alpha d\mu - [\pi^{1-\alpha}+(1-\pi)^{1/\alpha}]^\alpha \bigg)$. The divergence is 0 iff $P=Q$ and reaches a maximal value if $P$ is orthogonal to $Q$.
+
+The square roots $\sqrt{I_\alpha(X,Y)}$ of the Arimoto and Shannon informations with uniformly distributed binary inputs are metrics in the space of conditional output distributions $P,Q$.
+
+\section{Divergeces and Statistical Information}
+The difference between the prior and posterior Bayes loss is the *statistical information* in the model.
+
+\begin{theorem}
+  The Arimoto entropies $H_\alpha(Y)$, $H_\alpha(Y|X)$, and the informations $I_\alpha(X;Y)$ extend to $\alpha=0$ and satisfy:
+  $$H_0(Y)=B_\pi, H_0(Y|X)=B_\pi(P,Q), I_0(X;Y)=I_\pi(P,Q)$$
+  Where $I_\pi(P,Q)$ is the statistical information.
+  Then the f-divergence is also a statistical information:
+  $$\mathbb{I}_{\pi,0}(P,Q)=I_\pi(P,Q)$$
+\end{theorem}
+
+\textbf{Every f-divergence is an average statistical information}:
+
+\begin{theorem}
+Let $f \in \mathrm{F}$ and let $\Gamma_f$ be the measure defined on (0,1). For arbitrary probability measures: P,Q:
+$$D_f(P,Q)=\int_{(0,1)} I_\pi(P,Q) d\Gamma_f(\pi)$$
+\end{theorem}
+
+\subsection{Summary}
+$\alpha$-divergences, or the f-divergences of Csiszar, are a generalization of many classic divergences. All f-divergences were shown to be average statsitical informations (prior and postrior Bayes errors) which differ only in the weights imposed on prior distributions.The statistical information and Shannon information were produced by $\alpha=0$ and $\alpha=1$ respectively, and were subsets of the Arimoto $\alpha$-informations. The Shannon-divergences and Arimoto $\alpha$-divergences are introduced. Square roots of these diveregnces are metrics.
+
+\section{Softmax function: Wikipedia}
+
+Softmax (normalized exponential function) is a generalization of the logistic function to multiple dimensions. It is often  used as the last activation function of a neural network to nromalize the output of a network to a probability distribution over predicted output classes.
+
+The softmax function takes a vector of K real numbers, and normalizes it to a pdf consisting of K probabilities. Prior to applying softmax, some vector components could be negative, greater than one, and might not sum to 1. After applying softmax, each component will be in the interval (0,1) and components will add to 1, so they can be interpreted as probabilities. Larger input components get larger probabilities.
+
+The standard softamx function is:
+$$\sigma(\textbf{z})_i=\frac{e^{z_i}}{\sum_{j=1}^K e^{z_j}}$$ for all i=1,...,K and $\textbf{z}=(z_1, ..., z_K)$.
+
+Instead of e, a different base $b>0$ can be used. Choosing a larger b will create a probability distribution that is more concentrated around the positions of the largest input values. 
+
+
+
 
 \section{More reading}
 Cressie and Reed family of power divergence
