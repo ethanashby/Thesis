@@ -10,14 +10,28 @@ library(tidyverse)
 library(variantprobs)
 library(data.table)
 library(ggbiplot)
+#the freaking best package for distances
+library(philentropy)
 ```
+
+```{r}
+#dist.diversity gives a TON of different distances
+dist.diversity(rbind(1:10/sum(1:10), 20:29/sum(20:29)), p = 2, unit = "log2")
+```
+
 
 ```{r }
 data(tcga)
-tcga_v_f <- tcga[
+
+tcga_nh <- data.table::setDT(tcga) %>% filter(MS=="Non-hypermutated")
+num_samps<-length(unique(tcga_nh$patient_id))
+tcga1<-tcga_nh %>% group_by(Hugo_Symbol) %>% dplyr::mutate("freq"=dplyr::n()/num_samps>0.03) %>% dplyr::filter(freq==TRUE)
+tcga1<-as.data.table(tcga1)
+
+tcga_v_f <- tcga1[
   # filter out all hypermutated tumors
   # & tumors with unknown cancer
-  MS == "Non-hypermutated" & !is.na(Cancer_Code),
+  MS=="Non-hypermutated" & !is.na(Cancer_Code),
   ][
     ,
     # number of tumors per cancer type
@@ -32,42 +46,119 @@ tcga_v_f <- tcga[
       ]
 
 probs<-suppressWarnings(tcga_v_f[,
-                                                         # Calculate Good Turing probabilities of
-                                                         # at least one new variants per CLUSTER & cancer type
-                                                         {
-                                                           GT_probs <- goodturing_probs(
-                                                             counts = v_f,
-                                                             m = n_tumor[1]
-                                                           )
-                                                           .(p_atleast_1new = GT_probs['atleast_1new'])
-                                                         },
-                                                         by = .(Hugo_Symbol, Cancer_Code)
-                                                         ] 
-                                                %>%
-                                                    dcast(
-                                                        Hugo_Symbol ~ Cancer_Code,
-                                                        value.var = "p_atleast_1new",
-                                                        fill = 1 - exp(- 1/(length(unique(tcga$patient_id)) + 1))
-                                                           ) %>%
-                                                  magrittr::set_rownames(.$Hugo_Symbol) %>%
-                                                  .[, Hugo_Symbol := NULL] %>%
-                                                  data.matrix()))
+        # Calculate Good Turing probabilities of
+        # at least one new variants per CLUSTER & cancer type
+        {
+          GT_probs <- goodturing_probs(
+          counts = v_f,
+          m = n_tumor[1]
+          )
+          .(p_atleast_1new = GT_probs['atleast_1new'])
+          },
+          by = .(Hugo_Symbol, Cancer_Code)
+          ] 
+          %>%
+          dcast(
+                Hugo_Symbol ~ Cancer_Code,
+                value.var = "p_atleast_1new",
+                fill = 1 - exp(- 1/(length(unique(tcga$patient_id)) + 1))
+                ) %>%
+          magrittr::set_rownames(.$Hugo_Symbol) %>%
+          .[, Hugo_Symbol := NULL] %>%
+          data.matrix())
 
-tmp<-probs %>% pivot_wider(names_from="Cancer_Code", values_from="p_atleast_1new")
 
-tmp[is.na(tmp)]<-0
+probs[c("OBSCN", "NEB"),] %>% melt() %>% ggplot(aes(x=Var2, y=Var1, size=value, color=Var1))+geom_point()
+div<-dist.diversity(t(apply(probs, MARGIN=1, FUN=estimate.probability, method="empirical"))[c(1,2),], p = 2, unit = "log2")
 
-mutfreqs.pca<-prcomp(tmp[,2:33], center=TRUE, scale=TRUE)
+norm_probs<-t(apply(probs, MARGIN=1, FUN=estimate.probability, method="empirical"))
+cosine_dist_mat<-matrix(nrow=dim(norm_probs)[1], ncol=dim(norm_probs)[1])
+for (i in 1:dim(norm_probs)[1]){
+  for (j in 1:dim(norm_probs)[1]){
+    cosine_dist_mat[i,j]<-cosine_dist(norm_probs[i,], norm_probs[j,], testNA=FALSE)
+  }
+}
 
-ggbiplot(mutfreqs.pca, var.axes=TRUE)
+
+heatmap(cosine_dist_mat, symm=TRUE, labRow=rownames(norm_probs), labCol=rownames(norm_probs))
+
+rownames(cosine_dist_mat)<-rownames(norm_probs)
+colnames(cosine_dist_mat)<-rownames(norm_probs)
+
+p <- heatmaply(cosine_dist_mat, 
+        dendrogram = "row",
+        xlab = "", ylab = "", 
+        main = "",
+        margins = c(60,100,40,20),
+        grid_color = "white",
+        grid_width = 0.00001,
+        titleX = FALSE,
+        hide_colorbar = FALSE,
+        symm=TRUE,
+        revC=TRUE,
+        branches_lwd = 0.1,
+        label_names = c("Rowgene", "Colgene", "CosineSim"),
+        scale_fill_gradient_fun = ggplot2::scale_fill_gradient2(
+            low = "blue", 
+            high = "red", 
+            midpoint = 0.5, 
+            limits = c(0, 1)
+        ),
+        fontsize_row = 5, fontsize_col = 5,
+        labCol = colnames(cosine_dist_mat),
+        labRow = rownames(cosine_dist_mat),
+        heatmap_layers = theme(axis.line=element_blank())
+        )
 ```
 
-## Including Plots
+```{r fig.width=5, fig.height=5}
+#######Function for visualizing distance between genes GT probs
+`%!in%` = Negate(`%in%`)
 
-You can also embed plots, for example:
+vis_dist_GT_genes<-function(x=norm_probs, dist="cosine", which_plot="heatmaply"){
+    if(dist %!in% getDistMethods()){stop("Error: please provide distance measure in getDistMethods()")}
+    dist_mat<-distance(x, method=dist, test.na = FALSE)
+    rownames(dist_mat)<-rownames(norm_probs)
+    colnames(dist_mat)<-rownames(norm_probs)
+    if(which_plot=="simple"){
+      p<-heatmap(dist_mat, symm=TRUE)
+      return(p)
+    }
+    if(which_plot=="heatmaply"){
+      p <- heatmaply(dist_mat, 
+        dendrogram = "row",
+        xlab = "", ylab = "", 
+        main = "",
+        margins = c(60,100,40,20),
+        grid_color = "white",
+        grid_width = 0.00001,
+        titleX = FALSE,
+        hide_colorbar = FALSE,
+        symm=TRUE,
+        revC=TRUE,
+        branches_lwd = 0.1,
+        label_names = c("Rowgene", "Colgene", "CosineSim"),
+        scale_fill_gradient_fun = ggplot2::scale_fill_gradient2(
+            low = "blue", 
+            high = "red", 
+            midpoint = mean(c(max(dist_mat), 0)), 
+            limits = c(0, max(dist_mat))
+        ),
+        fontsize_row = 5, fontsize_col = 5,
+        labCol = colnames(cosine_dist_mat),
+        labRow = rownames(cosine_dist_mat),
+        heatmap_layers = theme(axis.line=element_blank())
+      )
+      return(p)
+    }
+}
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+vis_dist_GT_genes(dist="cosine", which_plot = "simple")
+vis_dist_GT_genes(dist="jensen-shannon", which_plot = "simple")
+vis_dist_GT_genes(dist="kullback-leibler", which_plot = "simple")
+vis_dist_GT_genes(dist="bhattacharyya", which_plot = "simple")
+vis_dist_GT_genes(dist="hellinger", which_plot = "simple")
+vis_dist_GT_genes(dist="k_divergence", which_plot = "simple")
+vis_dist_GT_genes(dist="squared_chi", which_plot = "simple")
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

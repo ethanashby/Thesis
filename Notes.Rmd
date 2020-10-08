@@ -409,6 +409,10 @@ $$\sigma(\textbf{z})_i=\frac{e^{z_i}}{\sum_{j=1}^K e^{z_j}}$$ for all i=1,...,K 
 Instead of e, a different base $b>0$ can be used. Choosing a larger b will create a probability distribution that is more concentrated around the positions of the largest input values. 
 
 
+\section{}
+
+
+
 
 
 \section{More reading}
