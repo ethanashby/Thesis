@@ -12,6 +12,7 @@ library(data.table)
 library(ggbiplot)
 #the freaking best package for distances
 library(philentropy)
+library(heatmaply)
 ```
 
 ```{r}
@@ -124,9 +125,13 @@ vis_dist_GT_genes<-function(x=norm_probs, dist="cosine", which_plot="heatmaply")
       p<-heatmap(dist_mat, symm=TRUE)
       return(p)
     }
+    
+    row_dend  <- hclust(as.dist(dist_mat), method="average") %>% 
+    as.dendrogram()
+    
     if(which_plot=="heatmaply"){
       p <- heatmaply(dist_mat, 
-        dendrogram = "row",
+        dendrogram = "both",
         xlab = "", ylab = "", 
         main = "",
         margins = c(60,100,40,20),
@@ -135,10 +140,11 @@ vis_dist_GT_genes<-function(x=norm_probs, dist="cosine", which_plot="heatmaply")
         titleX = FALSE,
         hide_colorbar = FALSE,
         symm=TRUE,
-        revC=TRUE,
         branches_lwd = 0.1,
+        seriate="none",
         label_names = c("Rowgene", "Colgene", "CosineSim"),
         scale_fill_gradient_fun = ggplot2::scale_fill_gradient2(
+            name=dist,
             low = "blue", 
             high = "red", 
             midpoint = mean(c(max(dist_mat), 0)), 
@@ -147,8 +153,10 @@ vis_dist_GT_genes<-function(x=norm_probs, dist="cosine", which_plot="heatmaply")
         fontsize_row = 5, fontsize_col = 5,
         labCol = colnames(cosine_dist_mat),
         labRow = rownames(cosine_dist_mat),
-        heatmap_layers = theme(axis.line=element_blank())
+        heatmap_layers = theme(axis.line=element_blank()),
+        Rowv = row_dend
       )
+      
       return(p)
     }
 }
@@ -160,5 +168,95 @@ vis_dist_GT_genes(dist="bhattacharyya", which_plot = "simple")
 vis_dist_GT_genes(dist="hellinger", which_plot = "simple")
 vis_dist_GT_genes(dist="k_divergence", which_plot = "simple")
 vis_dist_GT_genes(dist="squared_chi", which_plot = "simple")
+
+vis_dist_GT_genes(dist="cosine")
+
+
+
+#####Generates hierarchies based on two distance metrics and compares them by cut length
+
+compare_hclust_results<-function(x=norm_probs, method1, method2, cut_depth=dim(norm_probs)[1]-1, plot=FALSE){
+  if(method1 %!in% getDistMethods()){stop("Error: please provide distance measure in getDistMethods()")}
+  if(method2 %!in% getDistMethods()){stop("Error: please provide distance measure in getDistMethods()")}
+  fo <- function(k) dendextend::FM_index_R(cutree(HC1, k), cutree(HC2, k))
+  d1<-distance(x, method=method1, test.na=FALSE, p=2, unit="log2")
+  rownames(d1)<-rownames(x)
+  colnames(d1)<-rownames(x)
+  d1<-as.matrix(d1)
+  HC1<-hclust(as.dist(d1), method="average")
+
+  #plot(HC, labels = rownames(d1), hang = 0.1, check = TRUE,
+     #axes = TRUE, frame.plot = FALSE, ann = TRUE,
+     #main = "Cluster Dendrogram",
+     #sub = NULL, xlab = NULL, ylab = "Height")
+
+  d2<-distance(x, method=method2, test.na=FALSE, p=2, unit="log2")
+  rownames(d2)<-rownames(x)
+  colnames(d2)<-rownames(x)
+  d2<-as.matrix(d2)
+  HC2<-hclust(as.dist(d2), method="average")
+  
+  ks=1:cut_depth
+  if(plot==TRUE) {plot(sapply(ks, fo)~ ks, type="b", main="BK plot comparing")}
+  if(plot==FALSE){
+    fm_indices<-sapply(ks, fo)
+    fm_indices
+  }
+}
+
+#compare_hclust_results(method1="cosine", method2="euclidean", plot=TRUE)
+
+#creates r plot faceted by comparison metric; FM metric vs cut
+#generates interactive plotly plot at bottom
+faceted_FM_plot<-function(dist_to_compare=NULL, cut_depth=10){
+if(is.null(dist_to_compare)){dist_to_compare<-getDistMethods()}
+df<-data.frame()
+
+suppressMessages(
+for (i in 1:length(dist_to_compare)){
+  mat<-matrix(nrow=length(dist_to_compare), ncol=cut_depth)
+  rownames(mat)<-dist_to_compare
+  colnames(mat)<-1:cut_depth
+  for (j in 1:length(dist_to_compare)){
+    mat[j,]<-compare_hclust_results(method1=dist_to_compare[i], method2=dist_to_compare[j], cut_depth=cut_depth)
+  }
+  tmp<-mat %>% melt()
+  colnames(tmp)<-c("metric", "dendrocut_k", "FM_index")
+  tmp$ref<-dist_to_compare[i]
+  df<-rbind(df, tmp) 
+}
+)
+
+df %>% ggplot()+geom_line(aes(x=dendrocut_k, y=FM_index, color=metric))+theme_bw()+theme(panel.grid = element_blank(), panel.background = element_rect(fill="black"))+facet_wrap(~ref)+guides(col=guide_legend(reverse=TRUE))
+}
+
+g<-faceted_FM_plot(dist_to_compare = c("hellinger", "harmonic_mean", "euclidean", "sorensen", "avg", "jensen-shannon", "bhattacharyya", "squared_chi", "cosine"))
+fig<-ggplotly(g)
+fig
+
+
+#creates dendrogram comparing distance metrics
+faceted_FM_dendrograpm<-function(dist_to_compare=NULL, cut_depth=10){
+  if(is.null(dist_to_compare)){dist_to_compare<-getDistMethods()}
+  
+  mat<-matrix(nrow=length(dist_to_compare), ncol=length(dist_to_compare))
+  rownames(mat)<-dist_to_compare
+  colnames(mat)<-dist_to_compare
+  suppressMessages(
+  for (i in 1:length(dist_to_compare)){
+    mat[i,]<-lapply(X=dist_to_compare, FUN=function(X){tail(compare_hclust_results(method1=dist_to_compare[i], method2=X, cut_depth = cut_depth), 1)}) %>% unlist()
+  }
+)
+
+  #hclust operates on dissimilarity
+dend_dmetrics<-hclust(as.dist(1-mat), method="average")
+plot(dend_dmetrics, main="Cluster dendrogram of distance metrics")
+}
+
+
+
+#######
+#Next time: change similarity metrics to distance metrics!!! hclust operates on dissimilarity so need to correct
+#######
 ```
 

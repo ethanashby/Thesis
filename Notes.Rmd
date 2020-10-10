@@ -408,12 +408,148 @@ $$\sigma(\textbf{z})_i=\frac{e^{z_i}}{\sum_{j=1}^K e^{z_j}}$$ for all i=1,...,K 
 
 Instead of e, a different base $b>0$ can be used. Choosing a larger b will create a probability distribution that is more concentrated around the positions of the largest input values. 
 
+\section{Comprehensive Survey on Distance/Similarity Measures Between PDFs}
+(@Cha2007)
 
-\section{}
+There are two approaches in pdf distance/similarity: vector and probabilistics. Since each level of some data (a histogram) are indpendent from other levels, a histogram/pdf can be considered as a vector, a point in in Euclidian space. In the probabilistics sense, computing distance between two pdfs is computing the Bayes probability (the overlap of the two pdfs as the distance).
 
+\subsection{Families}
 
+\textbf{Minkowski}: $d_{Mk}=\sqrt[p]{\bigg( \sum_{i=1}^d |P_i-Q_i|\bigg)}$
+\begin{itemize}
+  \item{Euclidian: $L_2$ (p=2)}
+  \item{City Block (Manhattan): $L_1$ (p=1)}
+  \item{Minkowski: $L_p$ (p arbitrary)}
+  \item{Chebyshev: $L_\infty$ (p=infinite)}
+\end{itemize}
 
+\textbf{$L_1$: Built off city block}
+\begin{itemize}
+  \item{Sørenson/Bray-Curtis: used in ecology, just City block/2}
+  \item{Gower: scales vector space to normalized space and then uses city block}
+  \item{Others}
+\end{itemize}
 
+\textbf{Intersection Family: Similarity}
+Many Intersection family similarities are just $L_1= 1-S$ (one minus a L1 family)
+\begin{itemize}
+  \item{Wave Hedges}
+  \item{Czekanowski Coefficient is similarity form of Sorenson}
+  \item{others}
+\end{itemize}
+
+\textbf{Inner Product Family: Similarity}
+Incorporate the inner product in their definitions, yields a scalar. Also can be considered the number of matches or overlap if using binary vectors. Frequently used in information retrieval and biological taxonomy for the binary feature vector comparison.
+\begin{itemize}
+  \item{Inner product: $P \cdot Q=\sum_{j=1}^d P_iQ_i$}
+  \item{Harmonic Mean: $2\sum_{j=1}^d \frac{P_iQ_i}{P_i+Q_i}$}
+  \item{Cosine (normalized inner product): $\frac{\sum_{i=1}^d P_iQ_i}{\sqrt{\sum_{i=1}^d P_i^2}\sqrt{\sum_{i=1}^d Q_i^2}}$}
+  \item{Kumar Hassebrook}
+  \item{Jaccard}
+  \item{Dice}
+\end{itemize}
+
+\textbf{Fidelity Family: Squared Chord Family: Distances}
+\begin{itemize}
+  \item{Bhattarcharya: -log fidelity, provides bounds on the Bayes misclassification probability (useful classification): $-\ln \sum_{i=1}^d \sqrt{P_iQ_i}$}
+  \item{Hellinger and Matusita, where Hellinger=$\sqrt{2}$*Matusita}
+\end{itemize}
+
+\textbf{$L_2$ or $\chi^2$ family: Distances... weighted euclidian distances}
+Good for measuring distance between histograms
+\begin{itemize}
+  \item{Squared Euclidian}
+  \item{Pearson's Chi-Square}
+  \item{Neyman Chi-Square}
+  \item{Squared Chi-Square: symmetric. Also known as triangular discrimination}
+  \item{Probabilistic Symmetric (2*squared chi square)}
+  \item{Divergence}
+  \item{Clark}
+  \item{Additive symmetric chi squared: $d_{symm}(P,Q)=d_{asym}(P,Q)+d_{asym}(Q,P)$}
+  \item{Many other symmetrized methods that use max, min, average}
+\end{itemize}
+
+\textbf{Shannon's Family}
+Based on the concept of probabilistic uncertainity or entropy.
+\begin{itemize}
+  \item{K-L}
+  \item{Jeffreys (Symmetrized KL divergence)}
+  \item{K divergence}
+  \item{Topsøe Distance (symmetrized K divergence)}
+  \item{Jensen-Shannon (1/2 Topsøe Distance)}
+\end{itemize}
+
+Caveats: usually replace zero by a very small value
+\begin{itemize}
+  \item{Symmetrized Chi-Square distances can run into 0/0 or division by 0}
+  \item{Divergences can run into 0log0}
+\end{itemize}
+
+![Dendrogram illustrating similarity between distance metrics](./Images for Notes/dendrogram sim dist measures.png)
+
+\section{Details on the Adjusted Rand Index}
+(@Yeung2001)
+
+In order to compare clustering results against external criteria (or clustering results to one another), measures of agreement between two partitions is useful.
+
+Let a be the number of pairs of objects that are in the same cluster in U and V, b the number of pairs of objects in the same cluster in U but not in V, c be the number of pairs of objects in same cluster in V but not in U, and d be the number of pairs of objects in different classes and different clusters in both partitions. a and d are agreements and b and c are disagreements. The \textbf{Rand index} is defined as $\frac{a+d}{a+b+c+d}$, which lies between 0 and 1, and when the partitions agree perfectly, Rand Index=1.
+
+The \textbf{adjusted rand index} accounts for the fact that the expected value of the rand index does not take a constant value.
+
+Review several clustering algorithms: 
+\begin{itemize}
+  \item{CAST: input is pairwise similarity between genes. constructs clusters one at a time. Calculates affinity for each gene, which is sum of similarity values between gene and cluster under construction ($C_{open}$), defined to have high affinity if affinity $a(g) \geq t|C_{open}|$, where t is some cutoff param. The algorithm iterates between adding high affinity genes and purging low agffinity genes. Iterates until all genes have been assigned to clusters and the cluster is closed. Chose genes with maximum number of neighbors to start a clsuter.)
+  \item{Hierarchical average-link: every object in its own cluster, at each iteration, two clusters with greatest similarity are merged, this process is repeated until the descired number, $k$ is produced. In avergae-link, the cluster similarity is the average pairwise similarity between objects in the two clusters.}
+  \item{K-means}
+\end{itemize}
+
+Review of similarity metrics: two most popular in gene expression analysis Euclidian distance and correlation coefficient.
+
+\section{f-information Measures for Efficient Selection of Discriminative Genes From Microarray Data}
+(@Maji2009)
+
+Among all the genes in microarray data, only a small fraction is effective for diagnostic purposes. Mutual information has been shown to be successful for selecting relevant non-redundant genes. $f$-information measures may be suitable for this task too. Gene-gene redundancy is computed by calculating the divergence of the joint distribution of the two genes' expression values. The performance of different $f$-information measures is compared with that of mutual information based on accuracy of a number of different algorithms. Some $f$-information measures outperform mutual information.
+
+Important goal: classify samples according to their gene expression profiles (e.g. cancer vs normal, types/subtypes of cancer, etc). Among the large amount of genes, only a small number are effective in performing a certain task. Also a small subset is desireable in developing gene-expression based diagnostic tools. The small number of training samples and large number of genes make gene selection a challenging problem. This is an important problem in ML called feature selection.
+
+Conventional approaches to gene (feature) selection involve evaluating different gene subsets by some index and selecting the best. Gene selection methods are divided into two broad categories: filter and wrapper approaches. In filter approaches, the best subset of genes is preselected by some criteria, which are independent of the performance of the ML method, making it computationally less expensive. Wrapper uses the prediction performance of a learning machine to determine the best subsets of genes, generally outperforming filter approaches but is more expensive.
+
+An optimal gene subset is relative to a certain criterion. Different criteria may lead to different subsets. Every criteria tries to measure the discriminating ability of a gene or gene group to distinguish class labels. Different statistical and information theoretic measure: F-test, t-test, entropy, information gain, MI, and NMI are used. Gene-gene redundancy are measured using MI, $L_1$ distance, Euclidian distance, Pearson's corr coefficient, etc however these depend on the actual gene expression values. Information measures depend on the probability distribution of the random variable, meaning they are more effective to evaluate gene-class relevance and gene-gene redundancy. Turns out measures of distance between joint pdf and product of marginals are information measures (f-divergences).
+
+\subsection{Maximum Relevance-Minimum Redundancy Framework}
+
+Want highly relevant genes and low redundancy (this reduces prediction capability). They want to measure relevance and redundancy quantitatively, and maximize relevance and minimize redundancy. They define $\hat{f}(G_i, C)$ as the relevance of Gene i to Class Label C and $\hat{f}(G_i, G_j)$ as the redundancy between these two genes Gi and Gj. I.e. the goal fo selecting a set of relevant genes is akin to maximizing $\mathcal{J}=mathcal{J}_{relev}-mathcal{J}_{redun}$ where $mathcal{J}_{relev}=\sum_{G_i \in S} \hat{f}(G_i, C)$ and $mathcal{J}_{redun}=\sum_{G_i, G_j \in S} \hat{f}(G_i, G_j)$.
+
+A greedy alg is often used to solve this problem. Initialize your diagnostic set as $S \leftarrow \emptyset$. Calculate relevance for each gene. Select the most relevant gene. Repeat this process until the desired number of genes are selected. Calculate redundancy between selected genes and each of the remaining unselected genes. From remaining genes, select the gene that maximizes relevance and minimizes redundancy with the genes in the select group.
+
+\subsection{f-information measures for gene selection}
+f-information measures calculate the distance between a given joint probability and the joint probability when variables are independent (product of marginals). 
+A special case of $f$-divergence measures is the $f$-information measures. They are defined similarly to f-divergenc emeasures but apply only to specific probability distributions: joint probability of two random variables and the product of their marginals. Thus, f-informations are a measure of dependence.
+1) V-information: uses $V=|x-1|$ whcih results in V-information, which calculates the absolute distance between joint probability of two RVs and the prodyct of their marginals:
+$$V(P||P_1 \times P_2)=\sum_{i,j} |p_{ij} -p_ip_j|$$
+2) $I_\alpha$-Information: The class inclused mutual information when $\alpha \rightarrow 1$.
+$$I_\alpha(P|| P_1 \times P_2)=\frac{1}{\alpha (1-\alpha)}\Bigg( \sum_{i,j} \frac{(p_{ij})^\alpha}{(p_ip_j)^{\alpha-1}}-1\Bigg)$$
+
+3) $M_\alpha$-Information, or Matusita information is a generalized version of the V-information, for $0 < alpha \leq 1$ is:
+$$M_\alpha(P||P_1 \times P_2)=\sum_{i,j}|(p_{ij})^\alpha -(p_ip_j)^\alpha)|^{1/\alpha}$$
+
+4) $\chi^\alpha$-Information is identical to the $M_\alpha$ information for $0 < alpha \leq 1$, but for $\alpha>1$ yields
+$$\chi^\alpha(P||P_1 \times P_2)=\sum_{i,j}\frac{|p_{ij}-p_ip_j|^\alpha}{(p_ip_j)^{\alpha-1}}$$
+
+5) Renyi divergence: a measure of inromation of order $\alpha$:
+$$R_\alpha(P||P_1 \times P_2)=\frac{1}{\alpha-1}\log\sum_{i,j}\frac{(p_{ij})^\alpha}{(p_ip_j)^{\alpha-1}}$$
+
+6) Discretization: class labels are fixed and gene expression measures are continous. In order to make these comparisons, expression values are discretized to overexpression, baseline, and underexpressed.
+
+\subsection{Results}
+
+Used 3 public cancer microarracy datasets (Breast, Leukemia, Colon). Use Naive Bayes Classifier, SVM, and KNN to compare performance of different informations.
+
+For a particular number of selected genes, the predictive accuracy for some f-informations was higher than mutual information or NMI irrespective of model or dataset. Best were $I_\alpha$, $M_\alpha$, $R_\alpha$ wih $\alpha=0.2$, 
+
+Also talk about class separability.
+
+\section{Distance Weighted Cosine Similarity}
 
 \section{More reading}
 Cressie and Reed family of power divergence
