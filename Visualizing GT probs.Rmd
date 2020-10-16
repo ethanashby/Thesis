@@ -9,10 +9,12 @@ output: pdf_document
 library(tidyverse)
 library(variantprobs)
 library(data.table)
-library(ggbiplot)
 #the freaking best package for distances
 library(philentropy)
 library(heatmaply)
+
+###initialize vector of similarities
+similarities<-c("intersection", "czekanowski", "kulczynski", "ruzicka", "inner_product", "harmonic_mean", "cosine", "hassebrook", "fidelity")
 ```
 
 ```{r}
@@ -176,26 +178,71 @@ vis_dist_GT_genes(dist="cosine")
 #####Generates hierarchies based on two distance metrics and compares them by cut length
 
 compare_hclust_results<-function(x=norm_probs, method1, method2, cut_depth=dim(norm_probs)[1]-1, plot=FALSE){
+  #return some errors if unsupported metrics provided
   if(method1 %!in% getDistMethods()){stop("Error: please provide distance measure in getDistMethods()")}
   if(method2 %!in% getDistMethods()){stop("Error: please provide distance measure in getDistMethods()")}
+  
+  #initialize local function that calculates FM_index to compare k-cuts of two hierarchies
   fo <- function(k) dendextend::FM_index_R(cutree(HC1, k), cutree(HC2, k))
+  
+  #############
+  ###First hierarchy built on distance/similarity
+  #############
   d1<-distance(x, method=method1, test.na=FALSE, p=2, unit="log2")
   rownames(d1)<-rownames(x)
   colnames(d1)<-rownames(x)
   d1<-as.matrix(d1)
+  
+  #if kulczynski similarity do 1/sim matrix to get dist
+  if(method1 =="kulczynski"){
+  HC1<-hclust(as.dist(1/d1), method="average")
+  }
+  #if in this group, use 1-sim to get dist
+  if(method1 %in% c("motyka", "intersection", "czekanowski", "cosine")){
+  HC1<-hclust(as.dist(1-d1), method="average")
+  }
+  #if in this group, use max-sim to get dist
+  if (method1 %in% c("ruzicka", "inner_product", "harmonic_mean", "hassebrook", "fidelity"))
+  {
+  HC1<-hclust(as.dist(max(d1)-d1), method="average")
+  }
+  #if a true distance metric, just leave it be
+  if (method1 %!in% similarities){
   HC1<-hclust(as.dist(d1), method="average")
+  }
 
   #plot(HC, labels = rownames(d1), hang = 0.1, check = TRUE,
      #axes = TRUE, frame.plot = FALSE, ann = TRUE,
      #main = "Cluster Dendrogram",
      #sub = NULL, xlab = NULL, ylab = "Height")
-
+  
+  ###############
+  ###Second hierarchy built on distance/similarity
+  ###############
+  
   d2<-distance(x, method=method2, test.na=FALSE, p=2, unit="log2")
   rownames(d2)<-rownames(x)
   colnames(d2)<-rownames(x)
   d2<-as.matrix(d2)
-  HC2<-hclust(as.dist(d2), method="average")
   
+  #if kulczynski similarity do 1/sim matrix to get dist
+  if(method2 =="kulczynski"){
+  HC2<-hclust(as.dist(1/d2), method="average")
+  }
+  #if in this group, use 2-sim to get dist
+  if (method2 %in% c("motyka", "intersection", "czekanowski", "cosine")){
+  HC2<-hclust(as.dist(1-d2), method="average")
+  }
+  #if in this group, use max-sim to get dist
+  if (method2 %in% c("ruzicka", "inner_product", "harmonic_mean", "hassebrook", "fidelity"))
+  {
+  HC2<-hclust(as.dist(max(d2)-d2), method="average")
+  }
+  #if a true distance metric, just leave it be
+  if (method2 %!in% similarities){
+  HC2<-hclust(as.dist(d2), method="average")
+  }
+
   ks=1:cut_depth
   if(plot==TRUE) {plot(sapply(ks, fo)~ ks, type="b", main="BK plot comparing")}
   if(plot==FALSE){
@@ -212,7 +259,7 @@ faceted_FM_plot<-function(dist_to_compare=NULL, cut_depth=10){
 if(is.null(dist_to_compare)){dist_to_compare<-getDistMethods()}
 df<-data.frame()
 
-suppressMessages(
+suppressWarnings(suppressMessages(
 for (i in 1:length(dist_to_compare)){
   mat<-matrix(nrow=length(dist_to_compare), ncol=cut_depth)
   rownames(mat)<-dist_to_compare
@@ -225,12 +272,12 @@ for (i in 1:length(dist_to_compare)){
   tmp$ref<-dist_to_compare[i]
   df<-rbind(df, tmp) 
 }
-)
+))
 
 df %>% ggplot()+geom_line(aes(x=dendrocut_k, y=FM_index, color=metric))+theme_bw()+theme(panel.grid = element_blank(), panel.background = element_rect(fill="black"))+facet_wrap(~ref)+guides(col=guide_legend(reverse=TRUE))
 }
 
-g<-faceted_FM_plot(dist_to_compare = c("hellinger", "harmonic_mean", "euclidean", "sorensen", "avg", "jensen-shannon", "bhattacharyya", "squared_chi", "cosine"))
+g<-faceted_FM_plot(cut_depth=20)
 fig<-ggplotly(g)
 fig
 
@@ -249,14 +296,12 @@ faceted_FM_dendrograpm<-function(dist_to_compare=NULL, cut_depth=10){
 )
 
   #hclust operates on dissimilarity
-dend_dmetrics<-hclust(as.dist(1-mat), method="average")
-plot(dend_dmetrics, main="Cluster dendrogram of distance metrics")
+  dend_dmetrics<-hclust(as.dist(mat), method="average")
+  plot(dend_dmetrics, main="Cluster dendrogram of distance metrics")
 }
 
+faceted_FM_dendrograpm(cut_depth=40)
 
 
-#######
-#Next time: change similarity metrics to distance metrics!!! hclust operates on dissimilarity so need to correct
-#######
 ```
 

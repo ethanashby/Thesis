@@ -1,0 +1,119 @@
+---
+title: "Recreating_Cha_dendrogram"
+author: "Ethan Ashby"
+date: "10/15/2020"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(variantprobs)
+library(data.table)
+#the freaking best package for distances
+library(philentropy)
+library(heatmaply)
+```
+
+```{r}
+data(tcga)
+
+tcga_nh <- data.table::setDT(tcga) %>% filter(MS=="Non-hypermutated")
+num_samps<-length(unique(tcga_nh$patient_id))
+tcga1<-tcga_nh %>% group_by(Hugo_Symbol) %>% dplyr::mutate("freq"=dplyr::n()/num_samps>0.03) %>% dplyr::filter(freq==TRUE)
+tcga1<-as.data.table(tcga1)
+
+tcga_v_f <- tcga1[
+  # filter out all hypermutated tumors
+  # & tumors with unknown cancer
+  MS=="Non-hypermutated" & !is.na(Cancer_Code),
+  ][
+    ,
+    # number of tumors per cancer type
+    n_tumor := length(unique(patient_id)),
+    by = Cancer_Code
+    ][,
+      # variant frequencies by gene, cancer type
+      # also save n_tumor per cancer
+      .(v_f = length(unique(patient_id)),
+        n_tumor = n_tumor[1]),
+      by = .(Variant, Hugo_Symbol, Cancer_Code)
+      ]
+
+probs<-suppressWarnings(tcga_v_f[,
+        # Calculate Good Turing probabilities of
+        # at least one new variants per CLUSTER & cancer type
+        {
+          GT_probs <- goodturing_probs(
+          counts = v_f,
+          m = n_tumor[1]
+          )
+          .(p_atleast_1new = GT_probs['atleast_1new'])
+          },
+          by = .(Hugo_Symbol, Cancer_Code)
+          ] 
+          %>%
+          dcast(
+                Hugo_Symbol ~ Cancer_Code,
+                value.var = "p_atleast_1new",
+                fill = 1 - exp(- 1/(length(unique(tcga$patient_id)) + 1))
+                ) %>%
+          magrittr::set_rownames(.$Hugo_Symbol) %>%
+          .[, Hugo_Symbol := NULL] %>%
+          data.matrix())
+
+norm_probs<-t(apply(probs, MARGIN=1, FUN=estimate.probability, method="empirical"))
+cosine_dist_mat<-matrix(nrow=dim(norm_probs)[1], ncol=dim(norm_probs)[1])
+for (i in 1:dim(norm_probs)[1]){
+  for (j in 1:dim(norm_probs)[1]){
+    cosine_dist_mat[i,j]<-cosine_dist(norm_probs[i,], norm_probs[j,], testNA=FALSE)
+  }
+}
+```
+
+```{r}
+
+#basically recreate Cha plot with a small fake dataset
+
+set.seed(11)
+
+#generate some toy pdfs that map to known 
+
+gene1<-c(0.1, 0.1, 0.6, 0.05, 0.1)
+gene1<-gene1/sum(gene1)
+gene2<-c(0.1, 0.01, 0.2, 0.05, 0.01)
+gene2<-gene2/sum(gene2)
+gene3<-c(0.3, 0.3, 0.2, 0.2, 0.8)
+gene3<-gene3/sum(gene3)
+gene4<-c(0.25, 0.3, 0.2, 0.2, 0.9)
+gene4<-gene4/sum(gene4)
+gene5<-c(0.4, 0.01, 0.05, 0.05, 0.2)
+gene5<-gene5/sum(gene5)
+gene6<-c(0.9, 0.1, 0.05, 0.01, 0.02)
+gene6<-gene6/sum(gene6)
+
+dummya<-c(1/5, 1/5, 1/5, 1/5, 1/5)
+
+mat<-rbind(dummya, gene1, gene2, gene3, gene4, gene5, gene6)
+
+dists<-getDistMethods()
+dist_corr<-matrix(nrow=46, ncol=46)
+
+suppressMessages(for(i in 1:46){
+  dx<-distance(rbind(dummya, gene1, gene2, gene3, gene4, gene5, gene6), method=dists[i], p=2, unit="log2")[1,2:7]
+  tmp1<-dx-mean(dx)
+  
+corrs<-unlist(lapply(dists, FUN=function(dist){
+  dy<-distance(rbind(dummya, gene1, gene2, gene3, gene4, gene5, gene6), method=dist, p=2)[1,2:7]
+  tmp2<-dy-mean(dy)
+  corr<-sum(tmp1*tmp2)/sqrt(sum(tmp1^2)*sum(tmp2^2))
+  1-abs(corr)}))
+
+dist_corr[i,]<-corrs})
+
+rownames(dist_corr)<-dists
+colnames(dist_corr)<-dists
+
+hclust(as.dist(dist_corr), method="average") %>% 
+    as.dendrogram() %>% plot(horiz=TRUE, xlim=c(0.08, 0.0))
+```
+
