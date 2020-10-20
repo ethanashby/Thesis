@@ -1,0 +1,140 @@
+---
+title: "data_structure"
+author: "Ethan Ashby"
+date: "10/15/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+library(tidyverse)
+#the freaking best package for distances
+library(philentropy)
+library(heatmaply)
+library(variantprobs)
+```
+
+```{r}
+data(tcga)
+
+tcga_nh <- data.table::setDT(tcga) %>% filter(MS=="Non-hypermutated")
+num_samps<-length(unique(tcga_nh$patient_id))
+tcga1<-tcga_nh %>% group_by(Hugo_Symbol) %>% dplyr::mutate("freq"=dplyr::n()/num_samps>0.03) %>% dplyr::filter(freq==TRUE)
+tcga1<-as.data.table(tcga1)
+
+tcga_v_f <- tcga1[
+  # filter out all hypermutated tumors
+  # & tumors with unknown cancer
+  MS=="Non-hypermutated" & !is.na(Cancer_Code),
+  ][
+    ,
+    # number of tumors per cancer type
+    n_tumor := length(unique(patient_id)),
+    by = Cancer_Code
+    ][,
+      # variant frequencies by gene, cancer type
+      # also save n_tumor per cancer
+      .(v_f = length(unique(patient_id)),
+        n_tumor = n_tumor[1]),
+      by = .(Variant, Hugo_Symbol, Cancer_Code)
+      ]
+
+probs<-suppressWarnings(tcga_v_f[,
+        # Calculate Good Turing probabilities of
+        # at least one new variants per CLUSTER & cancer type
+        {
+          GT_probs <- goodturing_probs(
+          counts = v_f,
+          m = n_tumor[1]
+          )
+          .(p_atleast_1new = GT_probs['atleast_1new'])
+          },
+          by = .(Hugo_Symbol, Cancer_Code)
+          ] 
+          %>%
+          dcast(
+                Hugo_Symbol ~ Cancer_Code,
+                value.var = "p_atleast_1new",
+                fill = 1 - exp(- 1/(length(unique(tcga$patient_id)) + 1))
+                ) %>%
+          magrittr::set_rownames(.$Hugo_Symbol) %>%
+          .[, Hugo_Symbol := NULL] %>%
+          data.matrix())
+
+
+#normalized vector of probabilities
+norm_probs<-t(apply(probs, MARGIN=1, FUN=estimate.probability, method="empirical"))
+
+#bivariate joint dist
+biv_joint<-cbind(probs, 1-probs)
+biv_joint<-biv_joint* 1/32 #supposing each cancer is equally likely
+colnames(biv_joint)<-c(paste(colnames(probs), "_1", sep=""), paste(colnames(probs), "_0", sep=""))
+
+#conditional dist
+tmp1<-probs * 1/32
+cond<-matrix(ncol=32, nrow=45)
+for (i in 1:dim(probs)[1]){
+  cond[i,]<-tmp1[i,]/rowMeans(probs)[i]
+}
+
+rownames(cond)<-rownames(probs)
+colnames(cond)<-colnames(probs)
+```
+
+```{r}
+`%!in%` = Negate(`%in%`)
+
+vis_dist_GT_genes<-function(x=norm_probs, dist="cosine", which_plot="heatmaply"){
+    if(dist %!in% getDistMethods()){stop("Error: please provide distance measure in getDistMethods()")}
+    if(dist=="cosine"){
+    dist_mat<-1-distance(x, method=dist, test.na = FALSE)}
+    if(dist!="cosine"){
+    dist_mat<-distance(x, method=dist, test.na = FALSE)
+    }
+    rownames(dist_mat)<-rownames(x)
+    colnames(dist_mat)<-rownames(x)
+    if(which_plot=="simple"){
+      p<-heatmap(dist_mat, symm=TRUE)
+      return(p)
+    }
+    
+    row_dend  <- hclust(as.dist(dist_mat), method="average") %>% 
+    as.dendrogram()
+    
+    if(which_plot=="heatmaply"){
+      p <- heatmaply(dist_mat, 
+        dendrogram = "both",
+        xlab = "", ylab = "", 
+        main = "",
+        margins = c(60,100,40,20),
+        grid_color = "white",
+        grid_width = 0.00001,
+        titleX = FALSE,
+        hide_colorbar = FALSE,
+        symm=TRUE,
+        branches_lwd = 0.1,
+        seriate="none",
+        label_names = c("Rowgene", "Colgene", "CosineSim"),
+        scale_fill_gradient_fun = ggplot2::scale_fill_gradient2(
+            name=dist,
+            low = "blue", 
+            high = "red", 
+            midpoint = mean(c(max(dist_mat), 0)), 
+            limits = c(0, max(dist_mat))
+        ),
+        fontsize_row = 5, fontsize_col = 5,
+        labCol = colnames(cosine_dist_mat),
+        labRow = rownames(cosine_dist_mat),
+        heatmap_layers = theme(axis.line=element_blank()),
+        Rowv = row_dend
+      )
+      
+      return(p)
+    }
+}
+
+vis_dist_GT_genes(x=norm_probs, dist="cosine", which_plot="simple")
+vis_dist_GT_genes(x=probs, dist="cosine", which_plot="simple")
+vis_dist_GT_genes(x=biv_joint, dist="cosine", which_plot="simple")
+vis_dist_GT_genes(x=cond, dist="cosine", which_plot="simple")
+```
+
