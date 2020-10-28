@@ -550,6 +550,30 @@ For a particular number of selected genes, the predictive accuracy for some f-in
 Also talk about class separability.
 
 \section{Distance Weighted Cosine Similarity}
+Notes taken elsewhere
+
+\section{A Distance and Angle Similarity Measure}
+(@Zhang1999)
+Similarity measure is esential for information retrieval. Used to measure whether a document matches a query, compare two documents, measure discriminative value of indexing terms, and to dynamically adjust the retrieval strategy by adding more terms with high similarity and discarding the terms with low similarity.
+They introduce a distance and angle integrated similarity measure.
+Cosine similarity is a direction-based similarity measure. It measures the similarity between a reference point and a document based on the direction of the document in the document in the space vis-a-vis the reference point. This ignores the impact of the distance between the reference point and document. The cosine similarity can efffectively identify documents in a vector document space that have the same indexing term distribution within each document; i.e. the same indexing terms and the same proportion of weights of any pair of indexing terms between two documents. The essence of the cosine measure is that it can identify the documents in terms of the indexing term distribution.
+
+The distance based similarity metric believes that documents that are close together are likely to be highly similar.
+
+Similarity should be measured by the topics they address and the extent to which they address them!
+
+Suppose you have a document near a reference point. In a distance sense, you could build a hypersphere centered at the reference point with radius from reference point to the document. Then you can rotate the document around the hypersphere, and notice that the angle-based similarity changes. We can use the cahnge in direction-based similarity to modify the distance-based similarity measure to reflect both.
+
+By modulating the a and c values, you can tune the emphasis to distance or angle-based similarity.
+
+\section{Evaluating the performance of similarity measures used in document clustering and information retrieval}
+(@Subhashini2010)
+Cosine similarity is superior to Jaccard and FAR superior to Euclidian.
+Document clustering puts all the related documents in groups which is useful for categorizing, organizing, and refining search results.
+Euclidian distance is explained. Cosine similarity is indpendent of document length, for example combining two identical copies of a document D into D0. Then cos(D, D0)=1, meaning the two documents are regarded as identical. Jaccard measures similarity as the intersection divided by the union of the objects.
+They go into query similarity and display some results which show that cosine and Jaccard are far better than euclidian, and cosine generally better than Jaccard. Metric distances like Euclidian distance are not appropriate for high-dimensional sparse domains.
+The quality of their clusterings are evaluated using purity and entropy. Lets say you have 3 categories (sports, news, music). You generate 3 clusters and label the clusters based on the majority category that appears in the cluster. Purity evaluates how coherant the cluster is. Purity is bounded above by 1 and teh higher the purity, the better clustering we have.
+
 
 \section{More reading}
 Cressie and Reed family of power divergence

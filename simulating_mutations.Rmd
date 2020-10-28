@@ -1,0 +1,428 @@
+---
+title: "Simulating_mutations"
+author: "Ethan Ashby"
+date: "10/21/2020"
+output: pdf_document
+---
+
+```{r}
+library(tidyverse)
+library(variantprobs)
+library(data.table)
+library(philentropy)
+library(mclust)
+library(cluster)
+```
+
+```{r}
+data(tcga)
+
+tcga_nh <- data.table::setDT(tcga) %>% filter(MS=="Non-hypermutated")
+num_samps<-length(unique(tcga_nh$patient_id))
+
+tcga_v_f <- tcga_nh[
+  # filter out all hypermutated tumors
+  # & tumors with unknown cancer
+  MS=="Non-hypermutated" & !is.na(Cancer_Code),
+  ][
+    ,
+    # number of tumors per cancer type
+    n_tumor := length(unique(patient_id)),
+    by = Cancer_Code
+    ][,
+      # variant frequencies by gene, cancer type
+      # also save n_tumor per cancer
+      .(v_f = length(unique(patient_id)),
+        n_tumor = n_tumor[1]),
+      by = .(Variant, Hugo_Symbol, Cancer_Code)
+      ]
+
+tcga_v_f[,.(TMB=sum(v_f)), by= .(Hugo_Symbol)] %>% ggplot(aes(x=TMB/32))+geom_density()+theme_bw()+scale_x_continuous(trans="log10")+theme(axis.text=element_text(size=14), axis.title = element_text(size=16))
+
+dat<-tcga_v_f[,.(TMB=sum(v_f)), by= .(Hugo_Symbol)]
+```
+
+```{r DEPRECIATED SIM, eval=F}
+
+sim_error_dist_metric<-function(n_genes=1000, method="cosine", show_plot=FALSE, seed=11, prior_noise=c(5,10), return_dend=TRUE){
+if(method %!in% getDistMethods()){stop("Error: please provide distance measure in getDistMethods()")}
+set.seed(seed)
+`%!in%` = Negate(`%in%`)
+similarities<-c("intersection", "czekanowski", "kulczynski", "ruzicka", "inner_product", "harmonic_mean", "cosine", "hassebrook", "fidelity")
+
+#prior on lambda
+prior_l=dat$TMB/32
+lambdas=sample(prior_l, n_genes, replace=TRUE)
+
+#initialize matrix of simulated genes
+sim_genes<-matrix(nrow=n_genes, ncol=32)
+
+#get indices to perturb
+indices<-sample(1:32, n_genes, replace=TRUE)
+
+#multiplicative noises
+etas<-runif(n_genes, min=prior_noise[1], max=prior_noise[2])
+
+for (i in 1:dim(sim_genes)[1]){
+  for (j in 1:dim(sim_genes)[2]){
+    if(j!=indices[i]){
+        sim_genes[i,j]<-rpois(1, lambda=lambdas[i])
+    }
+    if(j==indices[i]){
+        sim_genes[i,j]<-rpois(1, lambda=etas[i]*(1+lambdas[i]))
+    }
+  }
+}
+
+#scale mutated genes to probabilities
+sim_genes<-sim_genes/rowSums(sim_genes)
+
+#PCA
+if(show_plot==TRUE){
+sim.pca<-prcomp(sim_genes)
+autoplot(sim.pca, data=sim_genes)+theme_bw()+ggtitle("PCA plot of mutations in 1000 sim genes")
+}
+
+#calculate distances/similarities
+d1<-distance(sim_genes, method=method, test.na=FALSE, p=2, unit="log2")
+d1<-as.matrix(d1)
+rownames(d1)<-paste("gene", 1:n_genes, "")
+colnames(d1)<-paste("gene", 1:n_genes, "")
+
+#input into hierarchical clustering appropriately
+  if(method =="kulczynski"){
+  HC1<-hclust(as.dist(1/d1), method="average")
+  }
+  #if in this group, use 1-sim to get dist
+  if(method %in% c("motyka", "intersection", "czekanowski", "cosine")){
+  dnew<-1-d1
+  dnew[is.na(dnew)]=0
+  HC1<-hclust(as.dist(dnew), method="average")
+  }
+  #if in this group, use max-sim to get dist
+  if (method %in% c("ruzicka", "inner_product", "harmonic_mean", "hassebrook", "fidelity"))
+  {
+  dnew<-max(d1)-d1
+  dnew[is.na(dnew)]=0
+  HC1<-hclust(as.dist(dnew), method="average")
+  }
+  #if a true distance metric, just leave it be
+  if (method %!in% similarities){
+  dnew<-d1
+  dnew[is.na(dnew)]=0
+  HC1<-hclust(as.dist(dnew), method="average")
+  }
+
+#orders the indices based on order
+#indices[clust$order]
+
+#plot demonstrating node purity
+if(show_plot==TRUE){plot(HC1, labels=indices)}
+if(return_dend==TRUE){
+return(HC1)
+stop()}
+
+########
+#helper functions
+#######
+
+  #identifies if gene is next to one of its peers. Returns 0 if yes. Returns 1 if no. Input vector is indices[clust$order], the ordering of perturbation indices generated from hierarchical clustering
+loss_f<-function(vec){
+  loss<-c()
+  for (i in 1:length(vec)){
+    if (i==1){
+      if (vec[i]==vec[i+1]){
+        loss<-c(loss, 0)
+      }
+      if (vec[i]!=vec[i+1]){
+        loss<-c(loss, 1)
+      }
+    }
+    if (i != 1 & i != length(vec)){
+      if (vec[i]==vec[i+1] | vec[i]==vec[i-1]){
+        loss<-c(loss, 0)
+      }
+      if (vec[i]!=vec[i+1] & vec[i]!=vec[i-1]){
+        loss<-c(loss, 1)
+      }
+    }
+    if (i==length(vec)){
+      if (vec[i]==vec[i-1]){
+        loss<-c(loss, 0)
+      }
+      if (vec[i]!=vec[i-1]){
+        loss<-c(loss, 1)
+      }
+    }
+  }
+  loss
+}
+
+  # removes duplicates (e.g "aabbcd" returns "cd")... used to identify indices with no peers
+keep_singles <- function(v){
+  v[!(v %in% v[duplicated(v)])] 
+}
+
+  #missclassification error is number of genes not next to a peer - peerless genes
+missclass_error<-(sum(loss_f(vec=indices[HC1$order])) - length(keep_singles(indices)))/n_genes
+missclass_error
+}
+
+errors<-c()
+dists<-getDistMethods()
+dists<-dists[-which(dists=='kulczynski_s')]
+for (i in 1:length(dists)){
+errors<-c(errors, sim_error_dist_metric(method=dists[i]))
+}
+
+barplot(errors, names.arg=dists, cex.names=0.75, las=2, log="y", main="1000 simulated genes", ylab="Missclassification rate of HClust")
+```
+
+```{r one perturbed index per gene}
+sim_error_dist_metric<-function(n_genes=1000, method="cosine", show_plot=FALSE, seed=11, prior_noise=c(5,10), clust="hclust"){
+if(method %!in% getDistMethods()){stop("Error: please provide distance measure in getDistMethods()")}
+if(clust %!in% c("hclust", "pam")){stop("Error: please provide 'hclust' or 'pam' clustering")}
+set.seed(seed)
+`%!in%` = Negate(`%in%`)
+similarities<-c("intersection", "czekanowski", "kulczynski", "ruzicka", "inner_product", "harmonic_mean", "cosine", "hassebrook", "fidelity")
+
+#prior on lambda
+prior_l=dat$TMB/32
+lambdas=sample(prior_l, n_genes, replace=TRUE)
+
+#initialize matrix of simulated genes
+sim_genes<-matrix(nrow=n_genes, ncol=32)
+
+#get indices to perturb
+indices<-sample(1:32, n_genes, replace=TRUE)
+
+#multiplicative noises
+etas<-runif(n_genes, min=prior_noise[1], max=prior_noise[2])
+
+#populate gene mutation matrix
+for (i in 1:dim(sim_genes)[1]){
+  for (j in 1:dim(sim_genes)[2]){
+    if(j!=indices[i]){
+        sim_genes[i,j]<-rpois(1, lambda=lambdas[i])
+    }
+    if(j==indices[i]){
+        sim_genes[i,j]<-rpois(1, lambda=etas[i]*(1+lambdas[i]))
+    }
+  }
+}
+
+#scale mutated genes to probabilities
+sim_genes<-sim_genes/rowSums(sim_genes)
+
+#PCA
+if(show_plot==TRUE){
+sim.pca<-prcomp(sim_genes)
+autoplot(sim.pca, data=sim_genes)+theme_bw()+ggtitle("PCA plot of mutations in 1000 sim genes")
+}
+
+#calculate distances/similarities
+d1<-distance(sim_genes, method=method, test.na=FALSE, p=2, unit="log2")
+d1<-as.matrix(d1)
+rownames(d1)<-paste("gene", 1:n_genes, "")
+colnames(d1)<-paste("gene", 1:n_genes, "")
+
+#input into hierarchical clustering appropriately
+if(clust=="hclust"){
+  if(method =="kulczynski"){
+  HC1<-hclust(as.dist(1/d1), method="average")
+  }
+  #if in this group, use 1-sim to get dist
+  if(method %in% c("motyka", "intersection", "czekanowski", "cosine")){
+  dnew<-1-d1
+  dnew[is.na(dnew)]=0
+  HC1<-hclust(as.dist(dnew), method="average")
+  }
+  #if in this group, use max-sim to get dist
+  if (method %in% c("ruzicka", "inner_product", "harmonic_mean", "hassebrook", "fidelity"))
+  {
+  dnew<-max(d1)-d1
+  dnew[is.na(dnew)]=0
+  HC1<-hclust(as.dist(dnew), method="average")
+  }
+  #if a true distance metric, just leave it be
+  if (method %!in% similarities){
+  dnew<-d1
+  dnew[is.na(dnew)]=0
+  HC1<-hclust(as.dist(dnew), method="average")
+  }
+  
+if(show_plot==TRUE){plot(HC1, labels=indices)}
+
+#cut hierarchical cluster into 32 clusters
+cut<-cutree(HC1, k=32)
+
+#return adjusted rand index between cut and true perturb indices
+adjustedRandIndex(cut, indices)
+}
+
+#input pam clustering appropriately
+
+if(clust=="pam"){
+  if(method =="kulczynski"){
+  HC1<-pam(as.dist(1/d1), k=32, diss=TRUE)
+  }
+  #if in this group, use 1-sim to get dist
+  if(method %in% c("motyka", "intersection", "czekanowski", "cosine")){
+  dnew<-1-d1
+  dnew[is.na(dnew)]=0
+  pamc<-pam(as.dist(dnew), k=32, diss=TRUE)
+  }
+  #if in this group, use max-sim to get dist
+  if (method %in% c("ruzicka", "inner_product", "harmonic_mean", "hassebrook", "fidelity"))
+  {
+  dnew<-max(d1)-d1
+  dnew[is.na(dnew)]=0
+  pamc<-pam(as.dist(dnew), k=32, diss=TRUE)
+  }
+  #if a true distance metric, just leave it be
+  if (method %!in% similarities){
+  dnew<-d1
+  dnew[is.na(dnew)]=0
+  pamc<-pam(as.dist(dnew), k=32, diss=TRUE)
+  }
+
+adjustedRandIndex(pamc$clustering, indices)
+}
+}
+
+#hclust errors
+errors<-c()
+dists<-getDistMethods()
+dists<-dists[-which(dists=='kulczynski_s')]
+for (i in 1:length(dists)){
+errors<-c(errors, sim_error_dist_metric(method=dists[i]))
+}
+
+names(errors)<-dists
+
+par(mar=c(8, 4.1, 4.1, 2.1))
+barplot(sort(errors), cex.names=0.75, las=2, ylim=c(0,1), main="1000 simulated genes", ylab="Adjusted Rand Index 32-cut and indices")
+
+#pam errors
+pamerrors<-c()
+dists<-getDistMethods()
+dists<-dists[-which(dists=='kulczynski_s')]
+for (i in 1:length(dists)){
+pamerrors<-c(pamerrors, sim_error_dist_metric(n_genes=250, method=dists[i], clust="pam"))
+}
+
+names(pamerrors)<-dists
+par(mar=c(8, 4.1, 4.1, 2.1))
+barplot(sort(pamerrors), cex.names=0.75, las=2, ylim=c(0,1), main="250 simulated genes", ylab="Adjusted Rand Index of 32 PAM Clusters")
+```
+
+```{r two perturbed indices per gene}
+sim_error_dist_metric_2perturb<-function(n_genes=500, method="cosine", show_plot=FALSE, seed=11, prior_noise=c(5,10)){
+if(method %!in% getDistMethods()){stop("Error: please provide distance measure in getDistMethods()")}
+set.seed(seed)
+`%!in%` = Negate(`%in%`)
+
+similarities<-c("intersection", "czekanowski", "kulczynski", "ruzicka", "inner_product", "harmonic_mean", "cosine", "hassebrook", "fidelity")
+
+#prior on lambda
+prior_l=dat$TMB/32
+lambdas=sample(prior_l, n_genes, replace=TRUE)
+
+#initialize matrix of simulated genes
+sim_genes<-matrix(nrow=n_genes, ncol=32)
+
+#get indices to perturb
+indices<-lapply(1:n_genes, FUN=function(i){sample(1:32, size=2, replace=FALSE)})
+
+#multiplicative noises
+etas<-runif(n_genes, min=prior_noise[1], max=prior_noise[2])
+
+#populate gene mutation matrix
+for (i in 1:dim(sim_genes)[1]){
+  for (j in 1:dim(sim_genes)[2]){
+    if(j %!in% indices[[i]]){
+        sim_genes[i,j]<-rpois(1, lambda=lambdas[i])
+    }
+    if(j %in% indices[[i]]){
+        sim_genes[i,j]<-rpois(1, lambda=etas[i]*(1+lambdas[i]))
+    }
+  }
+}
+
+#scale mutated genes to probabilities
+sim_genes<-sim_genes/rowSums(sim_genes)
+
+#PCA
+if(show_plot==TRUE){
+sim.pca<-prcomp(sim_genes)
+autoplot(sim.pca, data=sim_genes)+theme_bw()+ggtitle("PCA plot of mutations in 1000 sim genes")
+}
+
+#calculate distances/similarities
+d1<-distance(sim_genes, method=method, test.na=FALSE, p=2, unit="log2")
+d1<-as.matrix(d1)
+rownames(d1)<-paste("gene", 1:n_genes, "")
+colnames(d1)<-paste("gene", 1:n_genes, "")
+
+#input pam clustering appropriately
+#chose fuzzifier using equation in https://academic.oup.com/bioinformatics/article/26/22/2841/227572
+  if(method =="kulczynski"){
+  dnew=(1/d1)
+  for (i in 1:dim[d1]){
+    sort(dnew[i], decreasing=FALSE)[1:2]
+  }
+  }
+  #if in this group, use 1-sim to get dist
+  if(method %in% c("motyka", "intersection", "czekanowski", "cosine")){
+  dnew<-1-d1
+  dnew[is.na(dnew)]=0
+  c1<-fanny(as.dist(dnew), k=32, diss=TRUE, memb.exp=1.04)
+  colnames(c1$membership)<-1:32
+  #return top 2 clust members
+  labels<-lapply(1:n_genes, FUN=function(i){as.numeric(names(sort(c1$membership[i,], decreasing=TRUE)[1:2]))})
+  }
+  #if in this group, use max-sim to get dist
+  if (method %in% c("ruzicka", "inner_product", "harmonic_mean", "hassebrook", "fidelity"))
+  {
+  dnew<-max(d1)-d1
+  dnew[is.na(dnew)]=0
+  c1<-fanny(as.dist(dnew), k=32, diss=TRUE, memb.exp=1.04)
+  colnames(c1$membership)<-1:32
+  #return top 2 clust members
+  labels<-lapply(1:n_genes, FUN=function(i){as.numeric(names(sort(c1$membership[i,], decreasing=TRUE)[1:2]))})
+  }
+  #if a true distance metric, just leave it be
+  if (method %!in% similarities){
+  dnew<-d1
+  dnew[is.na(dnew)]=0
+  c1<-fanny(as.dist(dnew), k=32, diss=TRUE, memb.exp=1.04)
+  colnames(c1$membership)<-1:32
+  #return top 2 clust members
+  labels<-lapply(1:n_genes, FUN=function(i){as.numeric(names(sort(c1$membership[i,], decreasing=TRUE)[1:2]))})
+  }
+
+sapply(X=labels, FUN=function(X){which(i %in% X)})
+```
+
+
+
+
+```{r echo=FALSE}
+#fitting weibull distribution to TMBs
+library(fitdistrplus)
+#fitting function to distribution of TMBs
+fit_w  <- fitdist(log(dat$TMB+1), "weibull")
+fit_g  <- fitdist(log(dat$TMB+1), "gamma")
+fit_ln <- fitdist(log(dat$TMB+1), "lnorm")
+plot.legend <- c("Weibull", "lognormal", "gamma")
+denscomp(list(fit_w, fit_g, fit_ln), legendtext = plot.legend)
+
+gofstat(list(fit_w, fit_g, fit_ln), fitnames = c("weibull", "gamma", "lnorm"))
+
+fit_w <- fitdist(dat$TMB, "weibull")
+fit_w
+
+plot(density(dat$TMB))
+curve(dweibull(x, shape=fit_w$estimate[1], scale=fit_w$estimate[2]), col="blue", lwd=2, add=T)
+```
+
