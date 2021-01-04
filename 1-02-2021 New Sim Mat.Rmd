@@ -1,0 +1,284 @@
+---
+title: "1:02:2021 LASSO Formulations"
+author: "Ethan Ashby"
+date: "1/2/2021"
+output: pdf_document
+---
+
+###Package Load
+```{r}
+library(philentropy)
+library(variantprobs)
+library(tidyverse)
+library(data.table)
+library(gtools)
+library(RColorBrewer)
+library(gplots)
+library(DescTools)
+library(reticulate)
+library(splus2R)
+source("calc_minfo copy.R")
+library(qgraph)
+library(huge)
+library(TCGAbiolinks)
+library(utils)
+library(igraph)
+`%!in%` = Negate(`%in%`)
+```
+
+### What I would like to do
+
+I need to generate a similarity (distance) matrix that incorporates both mutation, expression, and protein interaction information.
+
+What about this: a nxn matrix where:
+
+$$S_{i,j}=\frac{\alpha cor(Y_i, Y_j)+ \beta I(Z_i, Z_j)}{\alpha+\beta}$$
+
+So that each individual data type can be weighted according to the user. $D_i$ is dummy vector (class attribute) and $cor(X_i, D_j)$ is relevance score, $cor(Y_i, Y_j)$ is correlation in gene expression, and $I(Z_i, Z_j)$ is an indicator variable indicating if there is an interaction between proteins.
+
+###Code it up
+```{r}
+######Mutation
+
+data(tcga)
+
+  message("Initializing dummy vectors")
+  dummy_exp=1
+  dummies<-matrix(ncol=32, nrow=0)
+  if(dummy_exp==1){
+    dummies<-f.roland(n=32, m=1)
+  }
+  if(dummy_exp>1){
+      for(i in 1:dummy_exp){
+      dummies<-rbind(dummies, f.roland(n=32, m=i))
+    }
+  }
+
+  cols<-c()
+  for(i in 1:dim(dummies)[1]){
+    cols<-c(cols, paste(cancer_nums$Cancer_Code[which(dummies[i,]==1)], collapse="_"))
+  }
+
+message("Loading data")
+  tcga_nh <- data.table::setDT(tcga) %>% filter(MS=="Non-hypermutated")
+  num_samps<-length(unique(tcga_nh$patient_id))
+
+  tcga_v_f <- tcga_nh[
+    # filter out all hypermutated tumors
+    # & tumors with unknown cancer
+    MS=="Non-hypermutated" & !is.na(Cancer_Code),
+    ][, # variant frequencies by gene, cancer type
+      # also save n_tumor per cancer
+      n_tumor := length(unique(patient_id)),
+      by = .(Cancer_Code)][,
+                          .(v_f = length(unique(patient_id)), n_tumor = n_tumor[1]),
+                          by = .(Variant, Hugo_Symbol, Cancer_Code)
+                          ]
+  
+  #only return singletons
+  tcga_v_f<- tcga_v_f %>% filter(v_f==1)
+
+  cancer_nums<-tcga_v_f %>% dplyr::select(Cancer_Code, n_tumor) %>% distinct()
+  cancer_nums<-cancer_nums[order(cancer_nums$Cancer_Code),]
+  cancer_types<-cancer_nums$Cancer_Code %>% unique()
+
+### matrix of mutation counts per tiss. type
+  message("Calculating mutation frequencies")
+  dat_c<-suppressMessages(tcga_v_f           %>%
+    dcast(
+      Hugo_Symbol ~ Cancer_Code,
+      value.var = "v_f",
+      fill = 0
+    ) %>%
+    magrittr::set_rownames(.$Hugo_Symbol) %>%
+    .[, Hugo_Symbol := NULL] %>%
+    data.matrix())
+  
+  dat_c<-dat_c[rowSums(dat_c)>0,]
+  
+  ### scale by number of tumors per cancer type
+  dat<-matrix(ncol=32, nrow=dim(dat_c)[1])
+  for(i in 1:dim(dat_c)[1]){
+    dat[i,]<-1-exp(-dat_c[i,]/(cancer_nums$n_tumor+1))
+  }
+  rownames(dat)<-rownames(dat_c)
+  colnames(dat)<-colnames(dat_c)
+  
+  cancer_probs<-cancer_nums$n_tumor/num_samps
+  
+  message("Calculating similarities... this may take a second")
+  mat_of_mut_sims<-outer(FUN=Vectorize(function(X, Y){cosine_dist(dummies[Y,], dat[X,], testNA=FALSE)}), X=1:dim(dat)[1], Y=1:dim(dummies)[1])
+  
+  rownames(mat_of_mut_sims)<-rownames(dat)
+  colnames(mat_of_mut_sims)<-cols
+  
+  #############################
+  #mat_of_mut_sims is component 1
+  #############################
+  
+  projects<-TCGAbiolinks::getGDCprojects()$project_id
+  projects <- projects[grepl('^TCGA',projects,perl=T)]
+  projects<- projects %>% sort()
+  ##########
+  #Removed TCGA-COAD, doing TCGA-READ
+  projects<-projects[-24]
+  projects[6]<-"TCGA-READ"
+  
+output_list<-list()
+for(proj in projects){
+    proj="TCGA-ACC"
+    j=which(proj==projects)
+    ranked_genes=names(sort(mat_of_mut_sims[,j], decreasing = TRUE))
+    sims<-sort(mat_of_mut_sims[,j], decreasing = TRUE)
+    ranked_genes=names(sims[sims>0.70])
+    
+    #Read in rda files if already downloaded
+    if(paste(proj, ".rda", sep="") %in% list.files()){
+      print(paste("Found data for: ", proj, "... reading it in now", sep=" "))
+      file=paste(proj, ".rda", sep="")
+      data<-suppressMessages(suppressWarnings(attach(file)))
+      data<-data$data
+    }
+    
+    #Generate rda files if not yet downloaded
+    if(paste(proj, ".rda", sep="") %!in% list.files()){
+      print(paste("Retrieving expression data for:", proj, sep=" "))
+      
+      if(proj %!in% c("TCGA-COAD", "TCGA-READ")){
+      barcodes<-tcga_nh[paste("TCGA-", tcga_nh$Cancer_Code, sep="")==proj]$patient_id}
+      if(proj %in% c("TCGA-COAD", "TCGA-READ")){
+      barcodes<-tcga_nh[paste("TCGA-", tcga_nh$Cancer_Code, sep="")=="TCGA-COADREAD"]$patient_id}
+      
+      query <- GDCquery(project = proj,
+                      data.category = "Gene expression",
+                      data.type = "Gene expression quantification",
+                      platform = "Illumina HiSeq", 
+                      file.type  = "normalized_results",
+                      experimental.strategy = "RNA-Seq",
+                      barcode=barcodes,
+                      legacy = TRUE)
+      tryCatch(GDCdownload(query, method = "api", files.per.chunk = 20),
+              error = function(e) GDCdownload(query, method = "client"))
+      data<-GDCprepare(query, save=TRUE, save.filename=paste(proj, ".rda", sep=""))}
+
+    message(paste("Calculating coexpression matrix"))
+    norm_mat<-data@assays@data$normalized_count
+    rownames(norm_mat)<-data@rowRanges$gene_id
+    
+    #subset for only genes in ranked list
+    norm_mat<-norm_mat[which(rownames(norm_mat) %in% ranked_genes), ]
+    
+    #calculate covariance matrix and remove duplicates
+    cor_mat<-abs(cor(t(norm_mat)))
+    dup<-duplicated(rownames(cor_mat))
+    if(any(dup)==TRUE){
+    cor_mat<-cor_mat[c(-which(dup)),c(-which(dup))]}
+    if(any(dup)==FALSE){
+    foo()
+    }
+    
+    cor_mat<-cor_mat[c(-which(rowSums(is.na(cor_mat))==dim(cor_mat)[1]-1)), c(-which(rowSums(is.na(cor_mat))==dim(cor_mat)[1]-1))]
+}
+    
+    ###########################
+    #cor_mat is component 2
+    
+
+# HI Binary: http://www.interactome-atlas.org/download
+# HINT Co-Complex: http://hint.yulab.org/download/
+HI<-read.table("HI-union.tsv")
+HINT<-HomoSapiens_cocomp_hq
+custom <- read_delim("custom.csv", "\t", 
+    escape_double = FALSE, trim_ws = TRUE)
+
+bininter<-left_join(left_join(HI, custom %>% select(`Approved symbol`,`Ensembl gene ID`), by=c("V1"="Ensembl gene ID")), custom %>% select(`Approved symbol`,`Ensembl gene ID`), by=c("V2"="Ensembl gene ID"))
+
+bininter<-bininter %>% dplyr::select(`Approved symbol.x`, `Approved symbol.y`)
+colnames(bininter)<-c("Gene_A", "Gene_B")
+
+cocomp<-HINT %>% dplyr::select(Gene_A, Gene_B)
+
+cocomp<-separate_rows(cocomp, 2 ,sep = "\\|")
+
+tot_interacts<-rbind(bininter, cocomp)
+
+tot_interacts<-distinct(tot_interacts)
+
+g<-graph_from_data_frame(bininter, directed = FALSE)
+
+adj<-as_adjacency_matrix(g)
+
+  ######################
+  #adj is component 3
+
+#distance matrix for protein interactions
+inter<-1-adj[which(rownames(adj) %in% rownames(cor_mat)), which(colnames(adj) %in% colnames(cor_mat))]
+diag(inter)<-0
+inter<-inter[sort(rownames(inter)),sort(colnames(inter))]
+  
+#distance matrix for correlations
+cor_forsum<-1-cor_mat[which(rownames(cor_mat) %in% rownames(inter)), which(colnames(cor_mat) %in% colnames(inter))]
+cor_forsum<-cor_forsum[sort(rownames(cor_forsum)), sort(colnames(cor_forsum))]
+
+####don't need rn
+#diff_mat<-abs(outer(mat_of_mut_sims[which(rownames(mat_of_mut_sims) %in% rownames(inter)),1], #mat_of_mut_sims[which(rownames(mat_of_mut_sims) %in% rownames(inter)),1], FUN="-"))
+
+####
+#relative contributions of protein interaction and coexpression
+alpha=1
+beta=1
+
+#distance matrix
+d=as.matrix((alpha*inter+beta*cor_forsum)/(alpha+beta))
+#similarity
+s=1-d
+adj<-adjacency.fromSimilarity(s, type="unsigned", power=1)
+#sft<-WGCNA::pickSoftThreshold.fromSimilarity(s, powerVector = seq(0.01,10,0.01))
+#thresh<-sft$fitIndices$Power[which(sft$fitIndices$SFT.R.sq==max(sft$fitIndices$SFT.R.sq))]
+
+#need 0 1 entries
+#top_overlap<-GTOMdist(adj, degree=1)
+
+HC1<-hclust(dist(1-adj), method="average")
+dyn<-labels2colors(cutreeDynamicTree(HC1, maxTreeHeight=5, deepSplit=TRUE, minModuleSize=5))
+stat1<-labels2colors(cutreeStatic(HC1, cutHeight = quantile(HC1$height, 0.95), minSize = 5))
+stat2<-labels2colors(cutreeStatic(HC1, cutHeight = quantile(HC1$height, 0.25), minSize = 5))
+stat3<-labels2colors(cutreeStatic(HC1, cutHeight = quantile(HC1$height, 0.1), minSize = 5))
+stat4<-labels2colors(cutreeStatic(HC1, cutHeight = quantile(HC1$height, 0.05), minSize = 5))
+stat5<-labels2colors(cutreeStatic(HC1, cutHeight = quantile(HC1$height, 0.01), minSize = 5))
+
+sizeGrWindow(12,5)
+plotDendroAndColors(HC1,
+colors=data.frame(dyn, stat1, stat2, stat3, stat4, stat5),  dendroLabels=NULL, cex.dendroLabels=0.35)
+
+#g<-graph.adjacency(s, mode="undirected",
+                  #weighted=TRUE,
+                  #diag=FALSE)
+
+#g2 <- delete.edges(g, which(E(g)$weight < 0.3))
+
+#plot(g2, vertex.color="white", vertex.label=NA, edge.color="red", vertex.size=3)
+
+#clusters(g2)
+
+
+###########
+#GLASSO on new sim mat
+
+try<-huge.glasso(s, lambda.min.ratio=0.05, nlambda=30)
+try$path[[6]] %>% huge.plot()
+exprobs<-1-exp(-colSums(dat_c[which(rownames(dat_c) %in% rownames(adj)[which(rowSums(try$path[[10]])!=0)]),])/cancer_nums$n_tumor)
+
+
+rowSums(s[which(rowSums(try$path[[6]])!=0), which(rowSums(try$path[[6]])!=0)]>0.5)
+```
+
+### Plot showing sparseness of mutation
+```{r}
+tot_samps<-length(unique(tcga_nh$patient_id))
+p<-tcga_nh %>% group_by(Hugo_Symbol) %>% summarize(n()/tot_samps)
+colnames(p)<-c("Gene", "Mutfreq")
+
+ggplot(p)+geom_histogram(aes(x=Mutfreq, fill=ifelse(Mutfreq>0.03, TRUE, FALSE)))+scale_fill_manual(values=c("black", "red"))+scale_x_continuous(trans="log10")+theme_bw()+ylab("Count")+xlab("Mutation frequency (# mutations/total samples)")+geom_vline(xintercept=0.03, linetype="dashed", color="red", size=1)+theme(legend.position="none")
+```
+

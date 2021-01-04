@@ -1,0 +1,822 @@
+---
+title: "Sequential Cosine Similarity Feature Grouping (SCSFG)"
+author: "Ethan Ashby"
+date: "12/16/2020"
+output: pdf_document
+---
+
+###Package Load
+```{r}
+library(philentropy)
+library(variantprobs)
+library(tidyverse)
+library(data.table)
+library(gtools)
+library(RColorBrewer)
+library(gplots)
+library(DescTools)
+library(reticulate)
+library(splus2R)
+source("calc_minfo copy.R")
+library(qgraph)
+library(huge)
+library(TCGAbiolinks)
+library(utils)
+`%!in%` = Negate(`%in%`)
+```
+
+###Load data
+
+```{r}
+data(tcga)
+```
+
+
+###Write function that calculates feature similarities and groups
+
+My method begins by generating a set of dummy vectors that correspond to class attributes. For example, the dummy vector for the cancer type `ACC` is $(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)$. The user is provided the option of how many dummy vectors they would like to generate using the `dummy_exp` argument. `dummy_exp=1` yields $32$ class attribute vectors, each corresponding to a unique cancer type. `dummy_exp=2` yields $32+\frac{32*31}{2}$ class attribute vectors, corresponding to unique cancer types AND all unique pairs of cancer types.
+
+There are 19020 genes mutated in the TCGA dataset, the vast majority of which are sparsely mutated. Finding a way to efficiently assess similarity between many features is a major challenge in information processing and retrieval. Fortunately, cosine similarity only considers the nonzero features, leading to its especially efficient performance on sparse data. The method offers an *a priori* mutation threshold filter, allowing the removal of extremely sparse signals (i.e. genes only mutated once across all samples). The cosine similarity between the reduced gene set and each of the class attribute vectors are calculated, generating lists of genes ranked in order of descending similarity to each particular class attribute vector.
+
+Distinguishing sparse signals from noise is a very difficult task. To address this challenge, I introduce gene expression as a metafeature to guide the aggregation of mutation signals. Gene expression is a known determinant of mutational processes (via gene expression coupled repair), so genes with similar expression patterns will tend to display similar mutation processes. Using the `GEPIA2` API, I identfied lists of similarly expressed genes for metagene candidates in TCGA tumor samples. Genes that showed 
+
+For each class attribute vector, a metagene is constructed by sequentially stepping through the ranked list and adding that feature's mutation data to the gene group. As each feature is added to the metagene, the normalized mutual information (NMI) between the mutation probabilities and cancer probabilities is calculated, to assess the tissue specificity mutation signal. This procedure is repeated until the NMI is locally maximized. The metagene that generates this locally maximized NMI is the final metagene.
+
+```{r}
+
+### Thank you Roland https://stackoverflow.com/questions/28368072/create-combinations-of-a-binary-vector
+f.roland <- function(n, m) {
+  ind <- combn(seq_len(n), m)
+  ind <- t(ind) + (seq_len(ncol(ind)) - 1) * n
+  res <- rep(0, nrow(ind) * n)
+  res[ind] <- 1
+  matrix(res, ncol = n, nrow = nrow(ind), byrow = TRUE)
+}
+
+#https://stats.stackexchange.com/questions/36309/how-do-i-find-peaks-in-a-dataset
+argmax <- function(x, y, w=1, ...) {
+  require(zoo)
+  n <- length(y)
+  y.smooth <- loess(y ~ x, ...)$fitted
+  y.max <- rollapply(zoo(y.smooth), 2*w+1, max, align="center")
+  delta <- y.max - y.smooth[-c(1:w, n+1-1:w)]
+  i.max <- which(delta <= 0) + w
+  list(x=x[i.max], i=i.max, y.hat=y.smooth)
+}
+
+test <- function(w, span) {
+  peaks <- argmax(x, y, w=w, span=span)
+
+  plot(x, y, cex=0.75, col="Gray", main=paste("w = ", w, ", span = ", span, sep=""))
+  lines(x, peaks$y.hat,  lwd=2) #$
+  y.min <- min(y)
+  sapply(peaks$i, function(i) lines(c(x[i],x[i]), c(y.min, peaks$y.hat[i]), col="Red", lty=2))
+  points(x[peaks$i], peaks$y.hat[peaks$i], col="Red", pch=19, cex=1.25)
+}
+
+SCSFG<-function(dummy_exp=1, heatmap=FALSE, bubbleplot=FALSE, n_view=100, heatmap_filename="heatmap_sim.jpeg", bubbleplot_filename="bubbleplot_metagenes.jpeg", mut_thresh=3){
+  message("Loading data")
+  tcga_nh <- data.table::setDT(tcga) %>% filter(MS=="Non-hypermutated")
+  num_samps<-length(unique(tcga_nh$patient_id))
+
+  tcga_v_f <- tcga_nh[
+    # filter out all hypermutated tumors
+    # & tumors with unknown cancer
+    MS=="Non-hypermutated" & !is.na(Cancer_Code),
+    ][, # variant frequencies by gene, cancer type
+      # also save n_tumor per cancer
+      n_tumor := length(unique(patient_id)),
+      by = .(Cancer_Code)][,
+                          .(v_f = length(unique(patient_id)), n_tumor = n_tumor[1]),
+                          by = .(Variant, Hugo_Symbol, Cancer_Code)
+                          ]
+  
+  #only return singletons
+  tcga_v_f<- tcga_v_f %>% filter(v_f==1)
+
+  cancer_nums<-tcga_v_f %>% dplyr::select(Cancer_Code, n_tumor) %>% distinct()
+  cancer_nums<-cancer_nums[order(cancer_nums$Cancer_Code),]
+  cancer_types<-cancer_nums$Cancer_Code %>% unique()
+
+### matrix of mutation counts per tiss. type
+  message("Calculating mutation frequencies")
+  dat_c<-tcga_v_f           %>%
+    dcast(
+      Hugo_Symbol ~ Cancer_Code,
+      value.var = "v_f",
+      fill = 0
+    ) %>%
+    magrittr::set_rownames(.$Hugo_Symbol) %>%
+    .[, Hugo_Symbol := NULL] %>%
+    data.matrix()
+  
+  dat_c<-dat_c[rowSums(dat_c)>mut_thresh,]
+
+### scale by number of tumors per cancer type
+  dat<-matrix(ncol=32, nrow=dim(dat_c)[1])
+  for(i in 1:dim(dat_c)[1]){
+    dat[i,]<-dat_c[i,]/cancer_nums$n_tumor
+  }
+  rownames(dat)<-rownames(dat_c)
+  colnames(dat)<-colnames(dat_c)
+
+  message("Initializing dummy vectors")
+  dummies<-matrix(ncol=32, nrow=0)
+  if(dummy_exp==1){
+    dummies<-f.roland(n=32, m=1)
+  }
+  if(dummy_exp>1){
+      for(i in 1:dummy_exp){
+      dummies<-rbind(dummies, f.roland(n=32, m=i))
+    }
+  }
+
+  cols<-c()
+  for(i in 1:dim(dummies)[1]){
+    cols<-c(cols, paste(cancer_nums$Cancer_Code[which(dummies[i,]==1)], collapse="_"))
+  }
+  
+  message("Calculating similarities... this may take awhile")
+  mat_of_sims<-outer(FUN=Vectorize(function(X, Y){cosine_dist(dummies[Y,], dat[X,], testNA=FALSE)}), X=1:dim(dat)[1], Y=1:dim(dummies)[1])
+  
+  rownames(mat_of_sims)<-rownames(dat)
+  colnames(mat_of_sims)<-cols
+
+  if(heatmap==TRUE){
+    message("Rendering Heatmap... this may take awhile")
+    jpeg(file= heatmap_filename)
+    heatmap.2(as.matrix(mat_of_sims[1:n_view,]), col=colorRampPalette(c("black", "white", "red")), Rowv=TRUE, Colv=FALSE, trace="none", dendrogram="none")
+    message(paste("Heatmap outputted as:", heatmap_filename))
+  }
+  
+  ###Figure out how to do grouping!
+  #barplot(dat_c[which(mat_of_sims[,2]>0.95),]/cancer_nums$n_tumor)
+  
+  #one way using weights
+  #vec<-c()
+  #for (i in seq(0.5, 1, 0.005)){
+  #vec<-c(vec, Gini(colSums(dat_c[which(mat_of_sims[,1]>i),]), n=cancer_nums$n_tumor))
+  #}
+  #plot(vec)
+  
+  #another way using counts/n_tumor
+  #vec<-c()
+  #for (i in seq(0.75, 1, 0.001)){
+  #vec<-c(vec, Gini(colSums(dat_c[which(mat_of_sims[,1]>i),])/cancer_nums$n_tumor))
+  #}
+  #plot(vec, type="p+l")
+  
+  #d<-colSums(dat_c[which(mat_of_sims[,1]>vec[which(vec>0.96)[1]]),])
+  
+  #cancer_probs<-matrix(cancer_nums$n_tumor/sum(cancer_nums$n_tumor), ncol=32)
+  #colnames(cancer_probs)<-cancer_nums$Cancer_Code
+  
+  #tmp<-d/cancer_nums$n_tumor
+  #tmp<-tmp/sum(tmp)
+  #tmp<-matrix(tmp, ncol=32)
+  #colnames(tmp)<-cancer_nums$Cancer_Code
+  
+  ###Ridge budget on metafeatures (gene expression) of sparse genes to add to group
+  ###
+  message("Evaluating metagenes based on local maximal NMI")
+  to_plot<-matrix(ncol=32, nrow=0)
+  list_of_genes<-list()
+  for(j in 1:32){
+    print(j)
+  ranked_genes=names(sort(mat_of_sims[,j], decreasing = TRUE))
+  
+  
+  cancer_probs=cancer_nums$n_tumor/sum(cancer_nums$n_tumor)
+  
+  nmi<-c()
+  for(i in 2:2000){
+  
+  #GT approx
+  mat<- 1-exp(-colSums(dat_c[which(rownames(dat_c) %in% ranked_genes[1:i]),])/(cancer_nums$n_tumor+1))
+  mat<-matrix(mat, ncol=32)
+  colnames(mat)<-cancer_nums$Cancer_Code
+  
+  nmi <- suppressWarnings(c(nmi, calc_minfo(
+  mat,
+  cancer_prob=cancer_probs,
+  binary_minfo = FALSE,
+  normalize = TRUE
+)))
+  }
+  x=1:500
+  y=nmi[1:500]
+  peaks<-argmax(x,y,w=2,span=0.1)
+    
+  to_plot<-rbind(to_plot, 1-exp(-colSums(dat_c[which(rownames(dat_c) %in% ranked_genes[1:peaks$x[1]]),])/(cancer_nums$n_tumor+1)))
+  
+  list_of_genes[[j]]<-dat_c[which(rownames(dat_c) %in% ranked_genes[1:peaks$x[1]]),] %>% rownames()
+}
+  bub_plot<-as.data.frame(to_plot)
+  bub_plot<-melt(bub_plot)
+  bub_plot$ID<-rep(paste("Metagene", cancer_nums$Cancer_Code), 32)
+  
+  #bubbleplot
+    if(bubbleplot==TRUE){
+    message("Rendering Bubbleplot")
+    jpeg(file= bubbleplot_filename)
+    bub_plot %>% ggplot()+geom_point(aes(x=variable, y=ID, size=value, color=ID))+theme_bw()+theme(axis.text.x=element_text(angle=90), legend.position="none")+xlab("")+ylab("")
+    message(paste("Bubbleplot outputted as:", bubbleplot_filename))
+    }
+  return(list_of_genes)
+}
+
+metagene_list<-SCSFG(dummy_exp=1, heatmap=FALSE, bubbleplot=FALSE, n_view = 100, mut_thresh=3)
+
+mgene1<-as.list(metagene_list[[1]])
+
+dat_c[which(rownames(dat_c) %in% metagene_list[[6]]),]
+```
+
+```{r}
+library(reticulate)
+#gepia<-import("gepia")
+#py_config()
+
+Sys.setenv(RETICULATE_PYTHON = "/Users/ethanashby/Desktop/Thesis Work/python3/bin/python")
+reticulate::py_config()
+```
+
+```{r}
+repl_python()
+import sys
+import os
+import gepia
+#import pandas as pd
+
+#import sys
+#print(sys.version)
+#import os
+#sys.path.append('/Library/Frameworks/Python.framework/Versions/3.6/lib/python3.6/site-packages')
+#import gepia
+#print(1, end='')
+#for p in sys.path:
+    #print(p)
+
+datasets=['ACC_Tumor', 'BLCA_Tumor', 'BRCA_Tumor', 'CESC_Tumor', 'CHOL_Tumor', 'COAD_Tumor', 'DLBC_Tumor', 'ESCA_Tumor', 'GBM_Tumor', 'HNSC_Tumor', 'KICH_Tumor', 'KIRC_Tumor', 'KIRP_Tumor', 'LAML_Tumor', 'LGG_Tumor', 'LIHC_Tumor', 'LUAD_Tumor', 'LUSC_Tumor', 'MESO_Tumor', 'OV_Tumor', 'PAAD_Tumor', 'PCPG_Tumor', 'PRAD_Tumor', 'READ_Tumor', 'SARC_Tumor', 'SKCM_Tumor', 'STAD_Tumor', 'TGCT_Tumor', 'THCA_Tumor', 'THYM_Tumor', 'UCEC_Tumor', 'UCS_Tumor']
+
+def extractDigits(lst): 
+    return [[el] for el in lst] 
+
+metagene_list=r.metagene_list
+for i in range(2, len(metagene_list)):
+  #set metagene
+  mgene=metagene_list[i]
+  #create sim object
+  sim=gepia.similar()
+  #create output directory and set as output directory
+  dir=['./gepiaResults/Mgene', str(i+1)]
+  os.mkdir("".join(dir))
+  dir1=['./gepiaResults/Mgene', str(i+1), "/"]
+  sim.setOutDir("".join(dir1))
+
+  #All tumor datasets takes way too long, just run on dataset of native metagene
+  sim.setParam('dataset', [datasets[i]])
+
+  genes=extractDigits(mgene)
+
+  for gene in genes:
+    sim.setParam('signature', gene)
+    sim.query()
+```
+
+```{r}
+folders<-paste("Mgene", 1:32, sep="")
+filtered_mgenes<-list()
+for (folder in folders){
+  print(folder)
+  files<-list.files(paste("gepiaResults/", folder, sep=""), pattern="*.tsv", full.names=TRUE)
+  ldf <- lapply(files, read.table)
+  gene_names<-gsub("_.*", "", gsub(paste("gepiaResults/", folder, "/", sep=""), "", files))
+  #anno<-read.delim("custom.txt")
+
+####Speed this up
+  mat_of_intersect_lengths<-matrix(ncol=length(ldf), nrow=length(ldf))
+  for(i in 1:length(ldf)){
+    mgene1<-data.frame("Ensembl.gene.ID"=gsub("\\..*", "", ldf[[i]]$V1))
+    #joined1<-left_join(mgene1, anno, by="Ensembl.gene.ID")
+  
+    for(j in 1:length(ldf)){
+      mgene2<-data.frame("Ensembl.gene.ID"=gsub("\\..*", "", ldf[[j]]$V1))
+      #joined2<-left_join(mgene2, anno, by="Ensembl.gene.ID")
+    
+      mat_of_intersect_lengths[i,j]<-length(intersect(na.omit(mgene1$Ensembl.gene.ID), na.omit(mgene2$Ensembl.gene.ID)))
+    }
+  }
+
+  rownames(mat_of_intersect_lengths)<-gene_names
+  colnames(mat_of_intersect_lengths)<-gene_names
+
+  mat_of_sims<-mat_of_intersect_lengths/1000
+  #for hclust
+  #mat_of_dists<-1-mat_of_sims
+
+  #must intersect w/ another gene's list at least 25% of time
+  add_to_list<-c()
+  for(i in 1:dim(mat_of_sims)[1]){
+    if(any(mat_of_sims[i,-i]> 0.25)){add_to_list<-c(add_to_list, rownames(mat_of_sims)[i])}
+  }
+  filtered_mgenes[[folder]]<-add_to_list
+}
+
+#hc<-hclust(as.dist(mat_of_dists))
+#plot(hc)
+filtered_mgenes
+
+to_plot<-matrix(ncol=32, nrow=0)
+for (i in 1:32){
+to_plot<-rbind(to_plot, 1-exp(-colSums(dat_c[which(rownames(dat_c) %in% filtered_mgenes[[i]]),])/(cancer_nums$n_tumor+1)))
+}
+
+bub_plot<-as.data.frame(to_plot)
+bub_plot<-melt(bub_plot)
+bub_plot$ID<-rep(paste("Metagene", cancer_nums$Cancer_Code), 32)
+
+    bub_plot %>% ggplot()+geom_point(aes(x=variable, y=ID, size=value, color=ID))+theme_bw()+theme(axis.text.x=element_text(angle=90), legend.position="none")+xlab("")+ylab("")
+```
+
+### New procedure: rearranged, using TCGA biolinks
+
+```{r}
+
+foo<-function(){}
+
+CosGLASSOFG<-function(dummy_exp=1, mut_thresh=0, sim_cutoff=0.7, nlambda=30, lambda.min.ratio=1E-6){
+  #################################
+  #Loading data
+  #################################
+  message("Loading data")
+  tcga_nh <- data.table::setDT(tcga) %>% filter(MS=="Non-hypermutated")
+  num_samps<-length(unique(tcga_nh$patient_id))
+
+  tcga_v_f <- tcga_nh[
+    # filter out all hypermutated tumors
+    # & tumors with unknown cancer
+    MS=="Non-hypermutated" & !is.na(Cancer_Code),
+    ][, # variant frequencies by gene, cancer type
+      # also save n_tumor per cancer
+      n_tumor := length(unique(patient_id)),
+      by = .(Cancer_Code)][,
+                          .(v_f = length(unique(patient_id)), n_tumor = n_tumor[1]),
+                          by = .(Variant, Hugo_Symbol, Cancer_Code)
+                          ]
+  
+  #only return singletons
+  tcga_v_f<- tcga_v_f %>% filter(v_f==1)
+
+  cancer_nums<-tcga_v_f %>% dplyr::select(Cancer_Code, n_tumor) %>% distinct()
+  cancer_nums<-cancer_nums[order(cancer_nums$Cancer_Code),]
+  cancer_types<-cancer_nums$Cancer_Code %>% unique()
+
+### matrix of mutation counts per tiss. type
+  message("Calculating mutation frequencies")
+  dat_c<-suppressMessages(tcga_v_f           %>%
+    dcast(
+      Hugo_Symbol ~ Cancer_Code,
+      value.var = "v_f",
+      fill = 0
+    ) %>%
+    magrittr::set_rownames(.$Hugo_Symbol) %>%
+    .[, Hugo_Symbol := NULL] %>%
+    data.matrix())
+  
+  dat_c<-dat_c[rowSums(dat_c)>mut_thresh,]
+
+### scale by number of tumors per cancer type
+  dat<-matrix(ncol=32, nrow=dim(dat_c)[1])
+  for(i in 1:dim(dat_c)[1]){
+    dat[i,]<-dat_c[i,]/cancer_nums$n_tumor
+  }
+  rownames(dat)<-rownames(dat_c)
+  colnames(dat)<-colnames(dat_c)
+
+  message("Initializing dummy vectors")
+  dummies<-matrix(ncol=32, nrow=0)
+  if(dummy_exp==1){
+    dummies<-f.roland(n=32, m=1)
+  }
+  if(dummy_exp>1){
+      for(i in 1:dummy_exp){
+      dummies<-rbind(dummies, f.roland(n=32, m=i))
+    }
+  }
+
+  cols<-c()
+  for(i in 1:dim(dummies)[1]){
+    cols<-c(cols, paste(cancer_nums$Cancer_Code[which(dummies[i,]==1)], collapse="_"))
+  }
+  
+  message("Calculating similarities... this may take a second")
+  mat_of_sims<-outer(FUN=Vectorize(function(X, Y){cosine_dist(dummies[Y,], dat[X,], testNA=FALSE)}), X=1:dim(dat)[1], Y=1:dim(dummies)[1])
+  
+  rownames(mat_of_sims)<-rownames(dat)
+  colnames(mat_of_sims)<-cols
+
+  #################
+  #TCGA biolinks
+  ################
+  projects<-TCGAbiolinks::getGDCprojects()$project_id
+  projects <- projects[grepl('^TCGA',projects,perl=T)]
+  projects<- projects %>% sort()
+  ##########
+  #Removed TCGA-COAD, doing TCGA-READ
+  projects<-projects[-24]
+  projects[6]<-"TCGA-READ"
+
+  #message("Evaluating metagenes based on local maximal NMI")
+output_list<-list()
+for(proj in projects){
+    j=which(proj==projects)
+    ranked_genes=names(sort(mat_of_sims[,j], decreasing = TRUE))
+    sims<-sort(mat_of_sims[,j], decreasing = TRUE)
+    ranked_genes=names(sims[sims>sim_cutoff])
+    
+    #Read in rda files if already downloaded
+    if(paste(proj, ".rda", sep="") %in% list.files()){
+      print(paste("Found data for: ", proj, "... reading it in now", sep=" "))
+      file=paste(proj, ".rda", sep="")
+      data<-suppressMessages(suppressWarnings(attach(file)))
+      data<-data$data
+    }
+    
+    #Generate rda files if not yet downloaded
+    if(paste(proj, ".rda", sep="") %!in% list.files()){
+      print(paste("Retrieving expression data for:", proj, sep=" "))
+      
+      if(proj %!in% c("TCGA-COAD", "TCGA-READ")){
+      barcodes<-tcga_nh[paste("TCGA-", tcga_nh$Cancer_Code, sep="")==proj]$patient_id}
+      if(proj %in% c("TCGA-COAD", "TCGA-READ")){
+      barcodes<-tcga_nh[paste("TCGA-", tcga_nh$Cancer_Code, sep="")=="TCGA-COADREAD"]$patient_id}
+      
+      query <- GDCquery(project = proj,
+                      data.category = "Gene expression",
+                      data.type = "Gene expression quantification",
+                      platform = "Illumina HiSeq", 
+                      file.type  = "normalized_results",
+                      experimental.strategy = "RNA-Seq",
+                      barcode=barcodes,
+                      legacy = TRUE)
+      tryCatch(GDCdownload(query, method = "api", files.per.chunk = 20),
+              error = function(e) GDCdownload(query, method = "client"))
+      data<-GDCprepare(query, save=TRUE, save.filename=paste(proj, ".rda", sep=""))}
+
+    message(paste("Calculating coexpression matrix"))
+    norm_mat<-data@assays@data$normalized_count
+    rownames(norm_mat)<-data@rowRanges$gene_id
+    
+    #subset for only genes in ranked list
+    norm_mat<-norm_mat[which(rownames(norm_mat) %in% ranked_genes), ]
+    
+    #calculate covariance matrix and remove duplicates
+    cov_mat<-cov(t(norm_mat))
+    dup<-duplicated(rownames(cov_mat))
+    if(any(dup)==TRUE){
+    cov_mat<-cov_mat[c(-dup),c(-dup)]}
+    if(any(dup)==FALSE){
+    foo()
+    }
+    
+    #calculate multiple glasso matrices
+    message(paste("Graphical LASSO on covariance matrix of gene expressions"))
+    glasso_mat<-huge::huge(cov_mat, method="glasso", nlambda=nlambda, lambda.min.ratio = lambda.min.ratio)
+    
+    message(paste("Retrieve connected gene modules and store as candidate gene groups"))
+    indices<-which(glasso_mat$sparsity!=0)
+    reg_genes<-list()
+    #return regularized edge weights
+    if(length(indices)==0){foo()}
+    if(length(indices)>0){
+    for(i in 1:length(indices)){
+      index<-indices[i]
+      adj<-glasso_mat$path[[index]]
+      a<-rowSums(adj)
+      reg_genes[[i]]<-rownames(cov_mat)[a>0]
+    }}
+    
+    output_list[[length(output_list)+1]]<-reg_genes
+}
+
+return(output_list)
+}
+```
+
+
+```{r}
+#retrieve gene expression information using TCGAbiolinks
+mgenes_schmorgasboard<-CosGLASSOFG(dummy_exp=1, mut_thresh=0, sim_cutoff=0.7, nlambda=30, lambda.min.ratio = 0.0001)
+```
+
+```{r}
+nmi_eval_mgenes<-function(mgenes_schmorgasboard){
+  #################################
+  #Loading data
+  #################################
+  message("Loading data")
+  tcga_nh <- data.table::setDT(tcga) %>% filter(MS=="Non-hypermutated")
+  num_samps<-length(unique(tcga_nh$patient_id))
+
+  tcga_v_f <- tcga_nh[
+    # filter out all hypermutated tumors
+    # & tumors with unknown cancer
+    MS=="Non-hypermutated" & !is.na(Cancer_Code),
+    ][, # variant frequencies by gene, cancer type
+      # also save n_tumor per cancer
+      n_tumor := length(unique(patient_id)),
+      by = .(Cancer_Code)][,
+                          .(v_f = length(unique(patient_id)), n_tumor = n_tumor[1]),
+                          by = .(Variant, Hugo_Symbol, Cancer_Code)
+                          ]
+  
+  #only return singletons
+  tcga_v_f<- tcga_v_f %>% filter(v_f==1)
+
+  cancer_nums<-tcga_v_f %>% dplyr::select(Cancer_Code, n_tumor) %>% distinct()
+  cancer_nums<-cancer_nums[order(cancer_nums$Cancer_Code),]
+  cancer_types<-cancer_nums$Cancer_Code %>% unique()
+
+### matrix of mutation counts per tiss. type
+  message("Calculating mutation frequencies")
+  dat_c<-suppressMessages(tcga_v_f           %>%
+    dcast(
+      Hugo_Symbol ~ Cancer_Code,
+      value.var = "v_f",
+      fill = 0
+    ) %>%
+    magrittr::set_rownames(.$Hugo_Symbol) %>%
+    .[, Hugo_Symbol := NULL] %>%
+    data.matrix())
+  
+  dat_c<-dat_c[rowSums(dat_c)>mut_thresh,]
+  
+  ### scale by number of tumors per cancer type
+  dat<-matrix(ncol=32, nrow=dim(dat_c)[1])
+  for(i in 1:dim(dat_c)[1]){
+    dat[i,]<-1-exp(-dat_c[i,]/cancer_nums$n_tumor)
+  }
+  rownames(dat)<-rownames(dat_c)
+  colnames(dat)<-colnames(dat_c)
+  
+  cancer_probs<-cancer_nums$n_tumor/num_samps
+  
+#null 99th quantile gini
+null_gini<-list()
+for(i in 2:500){
+    if(i %% 10 == 0){print(i)}
+    tmp<-c()
+    for(j in 1:1000){
+    mat<-1-exp(-colSums(dat_c[sample(nrow(dat_c), i),])/(cancer_nums$n_tumor+1))
+    mat<-matrix(mat, ncol=32)
+    colnames(mat)<-cancer_nums$Cancer_Code
+    tmp<-c(tmp, Gini(mat))
+    }
+    null_gini[[i]]<-tmp
+}
+  null_ref<-unlist(lapply(null_gini, quantile, probs=0.99))[-1]
+  
+  
+#return mgenes with largest residual gini index
+tmp<-list()
+for(i in 1:length(mgenes_schmorgasboard)){
+  gini<-c()
+  for(j in 1:length(mgenes_schmorgasboard[[i]])){
+      indices<-which(rownames(dat_c) %in% mgenes_schmorgasboard[[i]][[j]])
+      if(length(indices)>1){
+      mat<- 1-exp(-colSums(dat_c[indices,])/(cancer_nums$n_tumor+1))}
+      if(length(indices)==1){
+      mat<- 1-exp(-sum(dat_c[indices])/(cancer_nums$n_tumor+1))
+      }
+      mat<-matrix(mat, ncol=32)
+      colnames(mat)<-cancer_nums$Cancer_Code
+      
+      gini <- c(gini, Gini(mat))
+  }
+  
+  lens<-lapply(mgenes_schmorgasboard[[i]], length)
+  #plot(2:250, null_ref, ylim=c(0,1), col="red", type="l")
+  #points(lens, gini, col="blue")
+  
+  #par(pty="s")
+  #plot(null_ref[unlist(lens)-1], gini, xlim=c(0,1), ylim=c(0,1), xlab="99th Null Gini Quantile", ylab="Metagene Gini")
+  #text(null_ref[unlist(lens)-1], gini, labels=lens, cex=0.9, font=2, pos=3)
+  #abline(a=0, b=1, col="red")
+  
+  resids<-unname(gini-null_ref[unlist(lens)-1])
+  #plot(lens, resids)
+  #text(lens, resids, labels=lens, cex=0.9, font=2, pos=3)
+  #abline(h=max(resids, na.rm=TRUE))
+  
+  tmp<-c(tmp, c(list(mgenes_schmorgasboard[[i]][[which(resids==max(resids, na.rm=TRUE))[1]]]), max(resids, na.rm=TRUE)))
+}
+  tmp
+}
+
+tmp[c(TRUE, FALSE)]
+
+barplot(unlist(tmp[c(FALSE, TRUE)]), names=cancer_nums$Cancer_Code, las=2, ylab="Increase in Gini Index compared to 99% quantile of size-matched random grouping")
+
+```
+
+```{r}
+#Reconstruct to maximize Gini
+
+gini_rerank<-function(mgenes_schmorgasboard){
+  
+  #################################
+  #Loading data
+  #################################
+  message("Loading data")
+  tcga_nh <- data.table::setDT(tcga) %>% filter(MS=="Non-hypermutated")
+  num_samps<-length(unique(tcga_nh$patient_id))
+
+  tcga_v_f <- tcga_nh[
+    # filter out all hypermutated tumors
+    # & tumors with unknown cancer
+    MS=="Non-hypermutated" & !is.na(Cancer_Code),
+    ][, # variant frequencies by gene, cancer type
+      # also save n_tumor per cancer
+      n_tumor := length(unique(patient_id)),
+      by = .(Cancer_Code)][,
+                          .(v_f = length(unique(patient_id)), n_tumor = n_tumor[1]),
+                          by = .(Variant, Hugo_Symbol, Cancer_Code)
+                          ]
+  
+  #only return singletons
+  tcga_v_f<- tcga_v_f %>% filter(v_f==1)
+
+  cancer_nums<-tcga_v_f %>% dplyr::select(Cancer_Code, n_tumor) %>% distinct()
+  cancer_nums<-cancer_nums[order(cancer_nums$Cancer_Code),]
+  cancer_types<-cancer_nums$Cancer_Code %>% unique()
+
+### matrix of mutation counts per tiss. type
+  message("Calculating mutation frequencies")
+  dat_c<-suppressMessages(tcga_v_f           %>%
+    dcast(
+      Hugo_Symbol ~ Cancer_Code,
+      value.var = "v_f",
+      fill = 0
+    ) %>%
+    magrittr::set_rownames(.$Hugo_Symbol) %>%
+    .[, Hugo_Symbol := NULL] %>%
+    data.matrix())
+  
+  dat_c<-dat_c[rowSums(dat_c)>0,]
+  
+  ### scale by number of tumors per cancer type
+  dat<-matrix(ncol=32, nrow=dim(dat_c)[1])
+  for(i in 1:dim(dat_c)[1]){
+    dat[i,]<-1-exp(-dat_c[i,]/cancer_nums$n_tumor)
+  }
+  rownames(dat)<-rownames(dat_c)
+  colnames(dat)<-colnames(dat_c)
+  
+  cancer_probs<-cancer_nums$n_tumor/num_samps
+  
+  ############
+  #dummies
+  message("Initializing dummy vectors")
+  dummies<-matrix(ncol=32, nrow=0)
+  if(dummy_exp==1){
+    dummies<-f.roland(n=32, m=1)
+  }
+  if(dummy_exp>1){
+      for(i in 1:dummy_exp){
+      dummies<-rbind(dummies, f.roland(n=32, m=i))
+    }
+  }
+
+  
+  #null 99th quantile gini
+  message("Generating null gini index values... this may take a minute")
+  null_gini<-list()
+  for(i in 1:100){
+      tmp<-c()
+      for(j in 1:1000){
+        if(i!=1){
+          mat<-1-exp(-colSums(dat_c[sample(nrow(dat_c), i),])/(cancer_nums$n_tumor+1))
+        }
+        if(i==1){
+          mat<-1-exp(-sum(dat_c[sample(nrow(dat_c), i),])/(cancer_nums$n_tumor+1))
+        }
+      mat<-matrix(mat, ncol=32)
+      colnames(mat)<-cancer_nums$Cancer_Code
+      tmp<-c(tmp, Gini(mat))
+      }
+      null_gini[[i]]<-tmp
+  }
+  
+  #get null reference 99 quant gini values 
+  null_ref<-unlist(lapply(null_gini, quantile, probs=0.99))[-1]
+  
+  #return mgenes with largest residual gini index
+  message("Finding gene subset that contains maximal residual gini as proper subset")
+  tmp<-list()
+  for(i in 1:length(mgenes_schmorgasboard)){
+  gini<-c()
+  for(j in 1:length(mgenes_schmorgasboard[[i]])){
+      indices<-which(rownames(dat_c) %in% mgenes_schmorgasboard[[i]][[j]])
+      if(length(indices)>1){
+      mat<- 1-exp(-colSums(dat_c[indices,])/(cancer_nums$n_tumor+1))}
+      if(length(indices)==1){
+      mat<- 1-exp(-sum(dat_c[indices])/(cancer_nums$n_tumor+1))
+      }
+      mat<-matrix(mat, ncol=32)
+      colnames(mat)<-cancer_nums$Cancer_Code
+      
+      gini <- c(gini, Gini(mat))
+  }
+  
+  lens<-lapply(mgenes_schmorgasboard[[i]], length)
+  #plot(2:500, null_ref, ylim=c(0,1), col="red", type="l")
+  #points(lens, gini, col="blue")
+  
+  #par(pty="s")
+  #plot(null_ref[unlist(lens)-1], gini, xlim=c(0,1), ylim=c(0,1), xlab="99th Null Gini Quantile", ylab="Metagene Gini")
+  #text(null_ref[unlist(lens)-1], gini, labels=lens, cex=0.9, font=2, pos=3)
+  #abline(a=0, b=1, col="red")
+  
+  resids<-unname(gini-null_ref[unlist(lens)-1])
+  #plot(lens, resids)
+  #text(lens, resids, labels=lens, cex=0.9, font=2, pos=3)
+  #abline(h=max(resids, na.rm=TRUE))
+  
+  ############
+  #return one step up after the max
+  if(which(resids==max(resids, na.rm=TRUE))==length(resids)){
+  tmp<-c(tmp, c(list(mgenes_schmorgasboard[[i]][[which(resids==max(resids, na.rm=TRUE))[1]]], max(resids, na.rm=TRUE))))
+  }
+  if(which(resids==max(resids, na.rm=TRUE))<length(resids)){
+  tmp<-c(tmp, c(list(mgenes_schmorgasboard[[i]][[which(resids==max(resids, na.rm=TRUE))[1]+1]], max(resids, na.rm=TRUE))))
+  }
+}
+
+##########
+#output reranked genes
+message("Reranking genes and reconstructing metagene to maximize residual gini index")
+output_list<-list()
+  for(i in 1:32){
+  rerank<-apply(dat[which(rownames(dat) %in% tmp[c(TRUE, FALSE)][[i]]),], MARGIN=1, cosine_dist, dummies[i,], testNA=FALSE) %>% sort(decreasing=TRUE)
+  
+  gini<-c()
+  for(j in 1:length(names(rerank))){
+  tmp_mgene<-names(rerank)[1:j]
+  if(length(tmp_mgene)==1){
+    mat<-1-exp(-sum(dat_c[which(rownames(dat_c) %in% tmp_mgene),])/(cancer_nums$n_tumor+1))
+  }
+  if(length(tmp_mgene)>1){
+    mat<-1-exp(-colSums(dat_c[which(rownames(dat_c) %in% tmp_mgene),])/(cancer_nums$n_tumor+1))
+  }
+  
+  mat<-matrix(mat, ncol=32)
+  colnames(mat)<-cancer_nums$Cancer_Code
+      
+  gini <- c(gini, Gini(mat))
+  }
+
+  resids<-unname(gini-null_ref[1:length(rerank)])
+  output_list[[i]]<-names(rerank)[1:which(resids==max(resids, na.rm=TRUE))]
+  }
+
+output_list
+}
+
+output_list<-gini_rerank(mgenes_schmorgasboard = mgenes_schmorgasboard)
+```
+
+
+
+```{r}
+library(igraph)
+library(diffusr)
+HI<-read.table("HI-union.tsv")
+custom <- read_delim("custom.csv", "\t", 
+    escape_double = FALSE, trim_ws = TRUE)
+
+binary_interacts<-left_join(left_join(HI, custom %>% select(`Approved symbol`,`Ensembl gene ID`), by=c("V1"="Ensembl gene ID")), custom %>% select(`Approved symbol`,`Ensembl gene ID`), by=c("V2"="Ensembl gene ID"))
+
+g<-graph_from_data_frame(binary_interacts %>% dplyr::select(`Approved symbol.x`, `Approved symbol.y`) %>% slice(1:250), directed=FALSE)
+
+adj<-as_adjacency_matrix(g)
+
+adj<-adj[sort(rownames(adj)),sort(colnames(adj))]
+
+adj<-hub.correction(as.matrix(adj))
+
+h0<-apply(dat[which(rownames(dat) %in% rownames(adj)), ], MARGIN=1, FUN=Gini)
+adj<-adj[which(rownames(adj) %in% names(h0)), which(colnames(adj) %in% names(h0))]
+
+heat<-diffusr::heat.diffusion(h0=h0, adj, t=1000)
+
+V(g)$heat<-heat
+V(g)$color<-ifelse(V(g)$heat>quantile(heat, 0.99), "red", "white")
+V(g)$size<-ifelse(V(g)$heat>quantile(heat, 0.99), 5, 1)
+  
+plot(g, vertex.label=NA)
+```
+
+
+Heat diffusion
+LOCI (local correlation score for outlier detection)
