@@ -1,0 +1,91 @@
+---
+title: "1:02:2021 LASSO Formulations"
+author: "Ethan Ashby"
+date: "1/2/2021"
+output: pdf_document
+---
+
+###Package Load
+```{r}
+library(philentropy)
+library(variantprobs)
+library(tidyverse)
+library(data.table)
+library(gtools)
+library(RColorBrewer)
+library(gplots)
+library(DescTools)
+library(reticulate)
+library(splus2R)
+source("calc_minfo copy.R")
+library(qgraph)
+library(huge)
+library(TCGAbiolinks)
+library(utils)
+`%!in%` = Negate(`%in%`)
+```
+
+###Data
+```{r}
+######Mutation
+
+data(tcga)
+
+message("Loading data")
+  tcga_nh <- data.table::setDT(tcga) %>% filter(MS=="Non-hypermutated")
+  num_samps<-length(unique(tcga_nh$patient_id))
+
+  tcga_v_f <- tcga_nh[
+    # filter out all hypermutated tumors
+    # & tumors with unknown cancer
+    MS=="Non-hypermutated" & !is.na(Cancer_Code),
+    ][, # variant frequencies by gene, cancer type
+      # also save n_tumor per cancer
+      n_tumor := length(unique(patient_id)),
+      by = .(Cancer_Code)][,
+                          .(v_f = length(unique(patient_id)), n_tumor = n_tumor[1]),
+                          by = .(Variant, Hugo_Symbol, Cancer_Code)
+                          ]
+  
+  #only return singletons
+  tcga_v_f<- tcga_v_f %>% filter(v_f==1)
+
+  cancer_nums<-tcga_v_f %>% dplyr::select(Cancer_Code, n_tumor) %>% distinct()
+  cancer_nums<-cancer_nums[order(cancer_nums$Cancer_Code),]
+  cancer_types<-cancer_nums$Cancer_Code %>% unique()
+
+### matrix of mutation counts per tiss. type
+  message("Calculating mutation frequencies")
+  dat_c<-suppressMessages(tcga_v_f           %>%
+    dcast(
+      Hugo_Symbol ~ Cancer_Code,
+      value.var = "v_f",
+      fill = 0
+    ) %>%
+    magrittr::set_rownames(.$Hugo_Symbol) %>%
+    .[, Hugo_Symbol := NULL] %>%
+    data.matrix())
+  
+  dat_c<-dat_c[rowSums(dat_c)>0,]
+  
+  ### scale by number of tumors per cancer type
+  dat<-matrix(ncol=32, nrow=dim(dat_c)[1])
+  for(i in 1:dim(dat_c)[1]){
+    dat[i,]<-1-exp(-dat_c[i,]/cancer_nums$n_tumor)
+  }
+  rownames(dat)<-rownames(dat_c)
+  colnames(dat)<-colnames(dat_c)
+  
+  cancer_probs<-cancer_nums$n_tumor/num_samps
+```
+
+
+### What I ultimately need to do
+
+I need to generate a similarity (distance) matrix that incorporates both mutation, expression, and protein interaction information.
+
+What about this: a nxn matrix where:
+
+$$S_{i,j}=\frac{\alpha cor(X_i, X_j)+ \beta cor(Y_i, Y_j)+ \eta I}{\alpha+\beta+\eta}$$
+
+So that each individual data type can be weighted according to the user.

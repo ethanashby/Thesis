@@ -1,0 +1,84 @@
+---
+title: "01-04-2021"
+author: "Ethan Ashby"
+date: "1/4/2021"
+output: html_document
+---
+
+```{r}
+library(philentropy)
+library(variantprobs)
+library(tidyverse)
+library(data.table)
+library(gtools)
+library(RColorBrewer)
+library(gplots)
+library(DescTools)
+library(reticulate)
+library(splus2R)
+source("calc_minfo copy.R")
+library(qgraph)
+library(huge)
+library(TCGAbiolinks)
+library(utils)
+library(igraph)
+`%!in%` = Negate(`%in%`)
+```
+
+```{r}
+data(tcga)
+
+message("Loading data")
+  tcga_nh <- data.table::setDT(tcga) %>% filter(MS=="Non-hypermutated")
+  num_samps<-length(unique(tcga_nh$patient_id))
+
+  tcga_v_f <- tcga_nh[
+    # filter out all hypermutated tumors
+    # & tumors with unknown cancer
+    MS=="Non-hypermutated" & !is.na(Cancer_Code),
+    ][, # variant frequencies by gene, cancer type
+      # also save n_tumor per cancer
+      n_tumor := length(unique(patient_id)),
+      by = .(Cancer_Code)][,
+                          .(v_f = length(unique(patient_id)), n_tumor = n_tumor[1]),
+                          by = .(Variant, Hugo_Symbol, Cancer_Code)
+                          ]
+  
+  #only return singletons
+  tcga_v_f<- tcga_v_f %>% filter(v_f==1)
+
+  cancer_nums<-tcga_v_f %>% dplyr::select(Cancer_Code, n_tumor) %>% distinct()
+  cancer_nums<-cancer_nums[order(cancer_nums$Cancer_Code),]
+  cancer_types<-cancer_nums$Cancer_Code %>% unique()
+
+### matrix of mutation counts per tiss. type
+  message("Calculating mutation frequencies")
+  dat_c<-suppressMessages(tcga_v_f           %>%
+    dcast(
+      Hugo_Symbol ~ Cancer_Code,
+      value.var = "v_f",
+      fill = 0
+    ) %>%
+    magrittr::set_rownames(.$Hugo_Symbol) %>%
+    .[, Hugo_Symbol := NULL] %>%
+    data.matrix())
+  
+  dat_c<-dat_c[rowSums(dat_c)>0,]
+  
+  ### scale by number of tumors per cancer type
+  dat<-matrix(ncol=32, nrow=dim(dat_c)[1])
+  for(i in 1:dim(dat_c)[1]){
+    dat[i,]<-1-exp(-dat_c[i,]/(cancer_nums$n_tumor+1))
+  }
+  rownames(dat)<-rownames(dat_c)
+  colnames(dat)<-colnames(dat_c)
+  
+  
+######
+# use unseen variant probs as scores
+######
+scores<-dat[,1]
+
+data.frame(names(scores), unname(scores)) %>% write_tsv(path="score_ACC.tsv", col_names = FALSE)
+```
+

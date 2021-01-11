@@ -1,0 +1,199 @@
+---
+title: "1-07-2021 Stability"
+author: "Ethan Ashby"
+date: "1/7/2021"
+output: html_document
+---
+
+###Package Load
+```{r}
+library(philentropy)
+library(variantprobs)
+library(tidyverse)
+library(data.table)
+library(gtools)
+library(RColorBrewer)
+library(gplots)
+library(DescTools)
+library(reticulate)
+library(splus2R)
+source("calc_minfo copy.R")
+library(qgraph)
+library(huge)
+library(TCGAbiolinks)
+library(utils)
+library(igraph)
+`%!in%` = Negate(`%in%`)
+```
+
+### Code it up
+
+```{r}
+data(tcga)
+
+  message("Initializing dummy vectors")
+  dummy_exp=1
+  dummies<-matrix(ncol=32, nrow=0)
+  if(dummy_exp==1){
+    dummies<-f.roland(n=32, m=1)
+  }
+  if(dummy_exp>1){
+      for(i in 1:dummy_exp){
+      dummies<-rbind(dummies, f.roland(n=32, m=i))
+    }
+  }
+
+  cols<-c()
+  for(i in 1:dim(dummies)[1]){
+    cols<-c(cols, paste(cancer_nums$Cancer_Code[which(dummies[i,]==1)], collapse="_"))
+  }
+
+  #####################
+  #real data
+  #####################
+message("Loading data")
+  tcga_nh <- data.table::setDT(tcga) %>% filter(MS=="Non-hypermutated")
+  num_samps<-length(unique(tcga_nh$patient_id))
+
+  tcga_v_f <- tcga_nh[
+    # filter out all hypermutated tumors
+    # & tumors with unknown cancer
+    MS=="Non-hypermutated" & !is.na(Cancer_Code),
+    ][, # variant frequencies by gene, cancer type
+      # also save n_tumor per cancer
+      n_tumor := length(unique(patient_id)),
+      by = .(Cancer_Code)][,
+                          .(v_f = length(unique(patient_id)), n_tumor = n_tumor[1]),
+                          by = .(Variant, Hugo_Symbol, Cancer_Code)
+                          ]
+  
+  #only return singletons
+  tcga_v_f<- tcga_v_f %>% filter(v_f==1)
+  left_out_genes<-setdiff(tcga_nh$Hugo_Symbol, tcga_v_f$Hugo_Symbol)
+  tcga_v_f<-rbind(tcga_v_f, data.frame(Variant="A", Hugo_Symbol=left_out_genes, Cancer_Code="ACC", v_f=0, n_tumor=68))
+
+  cancer_nums<-tcga_v_f %>% dplyr::select(Cancer_Code, n_tumor) %>% distinct()
+  cancer_nums<-cancer_nums[order(cancer_nums$Cancer_Code),]
+  cancer_types<-cancer_nums$Cancer_Code %>% unique()
+
+### matrix of mutation counts per tiss. type
+  message("Calculating mutation frequencies")
+  dat_c<-suppressMessages(tcga_v_f           %>%
+    dcast(
+      Hugo_Symbol ~ Cancer_Code,
+      value.var = "v_f",
+      fill = 0
+    ) %>%
+    magrittr::set_rownames(.$Hugo_Symbol) %>%
+    .[, Hugo_Symbol := NULL] %>%
+    data.matrix())
+  
+  dat_c[which(rownames(dat_c) %in% left_out_genes),]<-0
+  
+  #dat_c<-dat_c[rowSums(dat_c)>0,]
+  
+  ### scale by number of tumors per cancer type
+  dat<-matrix(ncol=32, nrow=dim(dat_c)[1])
+  for(i in 1:dim(dat_c)[1]){
+    dat[i,]<-1-exp(-dat_c[i,]/(cancer_nums$n_tumor+1))
+  }
+  rownames(dat)<-rownames(dat_c)
+  colnames(dat)<-colnames(dat_c)
+  
+  #cancer_probs<-cancer_nums$n_tumor/num_samps
+  
+  message("Calculating similarities to class attributes")
+  mat_of_mut_sims<-outer(FUN=Vectorize(function(X, Y){cosine_dist(dummies[Y,], dat[X,], testNA=FALSE)}), X=1:dim(dat)[1], Y=1:dim(dummies)[1])
+  mat_of_mut_sims[which(is.na(rowSums(mat_of_mut_sims))),]<-0
+  rownames(mat_of_mut_sims)<-rownames(dat)
+  colnames(mat_of_mut_sims)<-cols
+  mat_of_mut_sims<-as(mat_of_mut_sims, "sparseMatrix")
+  
+  
+  store_res<-matrix(0L, nrow=19020, ncol=32)
+  store_res<-as(store_res, "sparseMatrix")
+  ###########################
+  #bootstrap patients (samples)
+  ###########################
+  
+  for(i in 1:5){
+  print(i)
+  message("Bootstrapping patient samples")
+  ids<-tcga_nh %>% dplyr::select(patient_id, Cancer_Code) %>% distinct
+  boot_ids<-c()
+  for(i in 1:length(cancer_nums$Cancer_Code)){
+    tmpids<-ids %>% filter(Cancer_Code==cancer_nums$Cancer_Code[i])
+    boot_ids<-c(boot_ids, sample(tmpids$patient_id, replace=TRUE))
+  }
+  
+  message("Recalculating mutation matrix... this may take a second")
+  list_of_slices<-mclapply(1:length(boot_ids), FUN=function(i){
+    tmp_slice<-tcga_nh[which(tcga_nh$patient_id==boot_ids[i]),]
+    tmp_slice$patient_id<-paste("Patient", i)
+    tmp_slice$Variant<-paste(tmp_slice$Variant, i)
+    return(tmp_slice)
+  }, mc.cores=6)
+
+  boot_v_f<-do.call(rbind.DataTable, list_of_slices)
+  rm(list_of_slices)
+  
+  boots_v_f <- boot_v_f[
+    # filter out all hypermutated tumors
+    # & tumors with unknown cancer
+    MS=="Non-hypermutated" & !is.na(Cancer_Code),
+    ][, # variant frequencies by gene, cancer type
+      # also save n_tumor per cancer
+      n_tumor := length(unique(patient_id)),
+      by = .(Cancer_Code)][,
+                          .(v_f = length(unique(patient_id)), n_tumor = n_tumor[1]),
+                          by = .(Variant, Hugo_Symbol, Cancer_Code)
+                          ]
+  
+  extra<-data.frame(Variant="A", Hugo_Symbol=setdiff(rownames(mat_of_mut_sims), unique(boot_v_f$Hugo_Symbol)), Cancer_Code="ACC", v_f=0, n_tumor=68)
+  boots_v_f<-rbind(boots_v_f, extra)
+  
+  boots_v_f<- boots_v_f %>% filter(v_f<=1)
+
+  cancer_nums<-boots_v_f %>% dplyr::select(Cancer_Code, n_tumor) %>% distinct()
+  cancer_nums<-cancer_nums[order(cancer_nums$Cancer_Code),]
+  cancer_types<-cancer_nums$Cancer_Code %>% unique()
+
+### matrix of mutation counts per tiss. type
+  message("Calculating mutation frequencies")
+  dat_c<-suppressMessages(boots_v_f           %>%
+    dcast(
+      Hugo_Symbol ~ Cancer_Code,
+      value.var = "v_f",
+      fill = 0
+    ) %>%
+    magrittr::set_rownames(.$Hugo_Symbol) %>%
+    .[, Hugo_Symbol := NULL] %>%
+    data.matrix())
+  
+  #assign ones that didn't appear a row of 0's
+  dat_c[which(rownames(dat_c) %in% extra$Hugo_Symbol),]<-0
+  
+  dat<-matrix(ncol=32, nrow=dim(dat_c)[1])
+  for(i in 1:dim(dat_c)[1]){
+    dat[i,]<-1-exp(-dat_c[i,]/(cancer_nums$n_tumor+1))
+  }
+  rownames(dat)<-rownames(dat_c)
+  colnames(dat)<-colnames(dat_c)
+  
+  mat_of_boot_sims<-outer(FUN=Vectorize(function(X, Y){cosine_dist(dummies[Y,], dat[X,], testNA=FALSE)}), X=1:dim(dat)[1], Y=1:dim(dummies)[1])
+  
+  rownames(mat_of_boot_sims)<-rownames(dat)
+  colnames(mat_of_boot_sims)<-cols
+
+  #make matrix sparse
+  sparse_boot<-as(mat_of_boot_sims, "sparseMatrix")
+  sparse_boot
+  rm(mat_of_boot_sims)
+  sparse_boot[which(is.na(rowSums(sparse_boot))),]<-0
+  
+  store_res<-store_res+abs((mat_of_mut_sims[match(rownames(sparse_boot), rownames(mat_of_mut_sims)),]-sparse_boot))
+  }
+  
+store_res
+```
+

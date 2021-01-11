@@ -24,6 +24,7 @@ library(TCGAbiolinks)
 library(utils)
 library(igraph)
 `%!in%` = Negate(`%in%`)
+foo<-function(){}
 ```
 
 ### What I would like to do
@@ -42,8 +43,8 @@ So that each individual data type can be weighted according to the user. $D_i$ i
 
 data(tcga)
 
+new_sim_mat<-function(dummy_exp=1, relevance_thresh=0.75, alpha=1, beta=1){
   message("Initializing dummy vectors")
-  dummy_exp=1
   dummies<-matrix(ncol=32, nrow=0)
   if(dummy_exp==1){
     dummies<-f.roland(n=32, m=1)
@@ -109,6 +110,8 @@ message("Loading data")
   message("Calculating similarities... this may take a second")
   mat_of_mut_sims<-outer(FUN=Vectorize(function(X, Y){cosine_dist(dummies[Y,], dat[X,], testNA=FALSE)}), X=1:dim(dat)[1], Y=1:dim(dummies)[1])
   
+  message("COMPONENT 1: mat_of_mut_sims")
+  message("Contains similarities between gene mutations and class attributes")
   rownames(mat_of_mut_sims)<-rownames(dat)
   colnames(mat_of_mut_sims)<-cols
   
@@ -124,32 +127,31 @@ message("Loading data")
   projects<-projects[-24]
   projects[6]<-"TCGA-READ"
   
-output_list<-list()
-for(proj in projects){
-    proj="TCGA-ACC"
-    j=which(proj==projects)
-    ranked_genes=names(sort(mat_of_mut_sims[,j], decreasing = TRUE))
-    sims<-sort(mat_of_mut_sims[,j], decreasing = TRUE)
-    ranked_genes=names(sims[sims>0.70])
+  output_list<-list()
+  for(proj in projects){
+      j=which(proj==projects)
+      ranked_genes=names(sort(mat_of_mut_sims[,j], decreasing = TRUE))
+      sims<-sort(mat_of_mut_sims[,j], decreasing = TRUE)
+      ranked_genes=names(sims[sims>relevance_thresh])
     
-    #Read in rda files if already downloaded
-    if(paste(proj, ".rda", sep="") %in% list.files()){
-      print(paste("Found data for: ", proj, "... reading it in now", sep=" "))
-      file=paste(proj, ".rda", sep="")
-      data<-suppressMessages(suppressWarnings(attach(file)))
-      data<-data$data
-    }
+      #Read in rda files if already downloaded
+      if(paste(proj, ".rda", sep="") %in% list.files()){
+        print(paste("Found data for: ", proj, "... reading it in now", sep=" "))
+        file=paste(proj, ".rda", sep="")
+        data<-suppressMessages(suppressWarnings(attach(file)))
+        data<-data$data
+      }
     
-    #Generate rda files if not yet downloaded
-    if(paste(proj, ".rda", sep="") %!in% list.files()){
-      print(paste("Retrieving expression data for:", proj, sep=" "))
+      #Generate rda files if not yet downloaded
+     if(paste(proj, ".rda", sep="") %!in% list.files()){
+        print(paste("Retrieving expression data for:", proj, sep=" "))
       
-      if(proj %!in% c("TCGA-COAD", "TCGA-READ")){
-      barcodes<-tcga_nh[paste("TCGA-", tcga_nh$Cancer_Code, sep="")==proj]$patient_id}
-      if(proj %in% c("TCGA-COAD", "TCGA-READ")){
-      barcodes<-tcga_nh[paste("TCGA-", tcga_nh$Cancer_Code, sep="")=="TCGA-COADREAD"]$patient_id}
+        if(proj %!in% c("TCGA-COAD", "TCGA-READ")){
+          barcodes<-tcga_nh[paste("TCGA-", tcga_nh$Cancer_Code, sep="")==proj]$patient_id}
+        if(proj %in% c("TCGA-COAD", "TCGA-READ")){
+          barcodes<-tcga_nh[paste("TCGA-", tcga_nh$Cancer_Code, sep="")=="TCGA-COADREAD"]$patient_id}
       
-      query <- GDCquery(project = proj,
+          query <- GDCquery(project = proj,
                       data.category = "Gene expression",
                       data.type = "Gene expression quantification",
                       platform = "Illumina HiSeq", 
@@ -157,128 +159,317 @@ for(proj in projects){
                       experimental.strategy = "RNA-Seq",
                       barcode=barcodes,
                       legacy = TRUE)
-      tryCatch(GDCdownload(query, method = "api", files.per.chunk = 20),
-              error = function(e) GDCdownload(query, method = "client"))
-      data<-GDCprepare(query, save=TRUE, save.filename=paste(proj, ".rda", sep=""))}
+          tryCatch(GDCdownload(query, method = "api", files.per.chunk = 20),
+               error = function(e) GDCdownload(query, method = "client"))
+          data<-GDCprepare(query, save=TRUE, save.filename=paste(proj, ".rda", sep=""))}
 
-    message(paste("Calculating coexpression matrix"))
-    norm_mat<-data@assays@data$normalized_count
-    rownames(norm_mat)<-data@rowRanges$gene_id
+          message(paste("Calculating coexpression matrix"))
+          norm_mat<-data@assays@data$normalized_count
+          rownames(norm_mat)<-data@rowRanges$gene_id
     
-    #subset for only genes in ranked list
-    norm_mat<-norm_mat[which(rownames(norm_mat) %in% ranked_genes), ]
+          #subset for only genes in ranked list
+          norm_mat<-norm_mat[which(rownames(norm_mat) %in% ranked_genes), ]
     
-    #calculate covariance matrix and remove duplicates
-    cor_mat<-abs(cor(t(norm_mat)))
-    dup<-duplicated(rownames(cor_mat))
-    if(any(dup)==TRUE){
-    cor_mat<-cor_mat[c(-which(dup)),c(-which(dup))]}
-    if(any(dup)==FALSE){
-    foo()
-    }
+          #calculate covariance matrix and remove duplicates
+          cor_mat<-abs(cor(t(norm_mat)))
+          dup<-duplicated(rownames(cor_mat))
+          if(any(dup)==TRUE){
+            cor_mat<-cor_mat[c(-which(dup)),c(-which(dup))]}
+          if(any(dup)==FALSE){
+            foo()
+          }
+          
+          message("Coexpression matrix generated")
+          cor_mat<-cor_mat[rowSums(is.na(cor_mat))<nrow(cor_mat), colSums(is.na(cor_mat))<ncol(cor_mat)]
+
+          message("Accessing interactome data")
+          # HI Binary: http://www.interactome-atlas.org/download
+          # HINT Co-Complex: http://hint.yulab.org/download/
+          HI<-read.table("HI-union.tsv")
+          HINT<-read.delim("HomoSapiens_cocomp_hq.txt")
+          custom <- suppressMessages(read_delim("custom.csv", "\t", 
+            escape_double = FALSE, trim_ws = TRUE))
+
+          bininter<-left_join(left_join(HI, custom %>% select(`Approved symbol`,`Ensembl gene ID`), by=c("V1"="Ensembl gene ID")), custom %>% select(`Approved symbol`,`Ensembl gene ID`), by=c("V2"="Ensembl gene ID"))
+
+          bininter<-bininter %>% dplyr::select(`Approved symbol.x`, `Approved symbol.y`)
+          colnames(bininter)<-c("Gene_A", "Gene_B")
+
+          cocomp<-HINT %>% dplyr::select(Gene_A, Gene_B)
+          cocomp<-separate_rows(cocomp, 2 ,sep = "\\|")
+
+          tot_interacts<-rbind(bininter, cocomp)
+          tot_interacts<-distinct(tot_interacts)
+
+          g<-graph_from_data_frame(tot_interacts, directed = FALSE)
+          adj<-as_adjacency_matrix(g)
+          adj<-adj[which(rownames(adj) %in% rownames(cor_mat)), which(colnames(adj) %in% colnames(cor_mat))]
+          message("Protein-Protein interaction matrix generated")
+          xtracols=setdiff(rownames(cor_mat), rownames(adj))
+          xtra<-matrix(rep(0, length(xtracols)*(dim(adj)[1])), ncol=dim(adj)[1])
+          adj_update<-rbind(adj, xtra)
+          adj_update<-cbind(adj_update, t(matrix(rep(0, length(xtracols)*(dim(adj_update)[1])), ncol=dim(adj_update)[1])))
+          rownames(adj_update)<-c(rownames(adj), xtracols)
+          colnames(adj_update)<-c(rownames(adj), xtracols)
+          adj<-adj_update
+          
+          ######################
+          #adj is component 3
+
+          #distance matrix for protein interactions
+          #inter<-1-adj[which(rownames(adj) %in% rownames(cor_mat)), which(colnames(adj) %in% colnames(cor_mat))]
+          #diag(inter)<-0
+          #inter<-inter[sort(rownames(inter)),sort(colnames(inter))]
     
-    cor_mat<-cor_mat[c(-which(rowSums(is.na(cor_mat))==dim(cor_mat)[1]-1)), c(-which(rowSums(is.na(cor_mat))==dim(cor_mat)[1]-1))]
-}
-    
-    ###########################
-    #cor_mat is component 2
-    
-
-# HI Binary: http://www.interactome-atlas.org/download
-# HINT Co-Complex: http://hint.yulab.org/download/
-HI<-read.table("HI-union.tsv")
-HINT<-HomoSapiens_cocomp_hq
-custom <- read_delim("custom.csv", "\t", 
-    escape_double = FALSE, trim_ws = TRUE)
-
-bininter<-left_join(left_join(HI, custom %>% select(`Approved symbol`,`Ensembl gene ID`), by=c("V1"="Ensembl gene ID")), custom %>% select(`Approved symbol`,`Ensembl gene ID`), by=c("V2"="Ensembl gene ID"))
-
-bininter<-bininter %>% dplyr::select(`Approved symbol.x`, `Approved symbol.y`)
-colnames(bininter)<-c("Gene_A", "Gene_B")
-
-cocomp<-HINT %>% dplyr::select(Gene_A, Gene_B)
-
-cocomp<-separate_rows(cocomp, 2 ,sep = "\\|")
-
-tot_interacts<-rbind(bininter, cocomp)
-
-tot_interacts<-distinct(tot_interacts)
-
-g<-graph_from_data_frame(bininter, directed = FALSE)
-
-adj<-as_adjacency_matrix(g)
-
-  ######################
-  #adj is component 3
-
-#distance matrix for protein interactions
-inter<-1-adj[which(rownames(adj) %in% rownames(cor_mat)), which(colnames(adj) %in% colnames(cor_mat))]
-diag(inter)<-0
-inter<-inter[sort(rownames(inter)),sort(colnames(inter))]
+         ###########################
+         #cor_mat is component 2
   
-#distance matrix for correlations
-cor_forsum<-1-cor_mat[which(rownames(cor_mat) %in% rownames(inter)), which(colnames(cor_mat) %in% colnames(inter))]
-cor_forsum<-cor_forsum[sort(rownames(cor_forsum)), sort(colnames(cor_forsum))]
+         #distance matrix for correlations
+         #cor_forsum<-1-cor_mat[which(rownames(cor_mat) %in% rownames(inter)), which(colnames(cor_mat) %in% colnames(inter))]
+         #cor_forsum<-cor_forsum[sort(rownames(cor_forsum)), sort(colnames(cor_forsum))]
 
-####don't need rn
-#diff_mat<-abs(outer(mat_of_mut_sims[which(rownames(mat_of_mut_sims) %in% rownames(inter)),1], #mat_of_mut_sims[which(rownames(mat_of_mut_sims) %in% rownames(inter)),1], FUN="-"))
+          ####don't need rn
+          #diff_mat<-abs(outer(mat_of_mut_sims[which(rownames(mat_of_mut_sims) %in% rownames(inter)),1],
+          #mat_of_mut_sims[which(rownames(mat_of_mut_sims) %in% rownames(inter)),1], FUN="-"))
 
-####
-#relative contributions of protein interaction and coexpression
-alpha=1
-beta=1
+          ####
+          #relative contributions of protein interaction and coexpression
 
-#distance matrix
-d=as.matrix((alpha*inter+beta*cor_forsum)/(alpha+beta))
-#similarity
-s=1-d
-adj<-adjacency.fromSimilarity(s, type="unsigned", power=1)
-#sft<-WGCNA::pickSoftThreshold.fromSimilarity(s, powerVector = seq(0.01,10,0.01))
-#thresh<-sft$fitIndices$Power[which(sft$fitIndices$SFT.R.sq==max(sft$fitIndices$SFT.R.sq))]
+          #distance matrix
+          #d=as.matrix((alpha*inter+beta*cor_forsum)/(alpha+beta))
+          #similarity
+          message("Composite similarity matrix generated")
+          s=(alpha*cor_mat+beta*adj)/(alpha+beta)
+          
+          #adj<-adjacency.fromSimilarity(s, type="unsigned", power=1)
+          #sft<-WGCNA::pickSoftThreshold.fromSimilarity(s, powerVector = seq(0.01,10,0.01))
+          #thresh<-sft$fitIndices$Power[which(sft$fitIndices$SFT.R.sq==max(sft$fitIndices$SFT.R.sq))]
 
-#need 0 1 entries
-#top_overlap<-GTOMdist(adj, degree=1)
+          #need 0 1 entries
+          #top_overlap<-GTOMdist(adj, degree=1)
 
-HC1<-hclust(dist(1-adj), method="average")
-dyn<-labels2colors(cutreeDynamicTree(HC1, maxTreeHeight=5, deepSplit=TRUE, minModuleSize=5))
-stat1<-labels2colors(cutreeStatic(HC1, cutHeight = quantile(HC1$height, 0.95), minSize = 5))
-stat2<-labels2colors(cutreeStatic(HC1, cutHeight = quantile(HC1$height, 0.25), minSize = 5))
-stat3<-labels2colors(cutreeStatic(HC1, cutHeight = quantile(HC1$height, 0.1), minSize = 5))
-stat4<-labels2colors(cutreeStatic(HC1, cutHeight = quantile(HC1$height, 0.05), minSize = 5))
-stat5<-labels2colors(cutreeStatic(HC1, cutHeight = quantile(HC1$height, 0.01), minSize = 5))
+          #HC1<-hclust(dist(1-adj), method="average")
+          #dyn<-labels2colors(cutreeDynamicTree(HC1, maxTreeHeight=5, deepSplit=TRUE, minModuleSize=5))
+          #stat1<-labels2colors(cutreeStatic(HC1, cutHeight = quantile(HC1$height, 0.95), minSize = 5))
+          #stat2<-labels2colors(cutreeStatic(HC1, cutHeight = quantile(HC1$height, 0.25), minSize = 5))
+          #stat3<-labels2colors(cutreeStatic(HC1, cutHeight = quantile(HC1$height, 0.1), minSize = 5))
+          #stat4<-labels2colors(cutreeStatic(HC1, cutHeight = quantile(HC1$height, 0.05), minSize = 5))
+          #stat5<-labels2colors(cutreeStatic(HC1, cutHeight = quantile(HC1$height, 0.01), minSize = 5))
 
-sizeGrWindow(12,5)
-plotDendroAndColors(HC1,
-colors=data.frame(dyn, stat1, stat2, stat3, stat4, stat5),  dendroLabels=NULL, cex.dendroLabels=0.35)
+          #sizeGrWindow(12,5)
+          #plotDendroAndColors(HC1,
+          #colors=data.frame(dyn, stat1, stat2, stat3, stat4, stat5),  dendroLabels=NULL, cex.dendroLabels=0.35)
 
-#g<-graph.adjacency(s, mode="undirected",
-                  #weighted=TRUE,
-                  #diag=FALSE)
+          #g<-graph.adjacency(s, mode="undirected",
+                    #weighted=TRUE,
+                    #diag=FALSE)
 
-#g2 <- delete.edges(g, which(E(g)$weight < 0.3))
+          #g2 <- delete.edges(g, which(E(g)$weight < 0.3))
+          #plot(g2, vertex.color="white", vertex.label=NA, edge.color="red", vertex.size=3)
+          #clusters(g2)
 
-#plot(g2, vertex.color="white", vertex.label=NA, edge.color="red", vertex.size=3)
+          ###########
+          #GLASSO on new sim mat
 
-#clusters(g2)
+          #glasso_list<-huge.glasso(s, lambda.min.ratio=0.05, nlambda=30)
+          message("Running tuning insensitive graph estimation")
+          glasso_list<-huge.tiger(as.matrix(s), lambda.min.ratio=0.01, nlambda=50)
+          #exprobs<-1-exp(-colSums(dat_c[which(rownames(dat_c) %in% rownames(adj)[which(rowSums(try$path[[10]])!=0)]),])/cancer_nums$n_tumor)
+          
 
+          #radial plot
+          #exprobs<-data.frame("exprobs"=exprobs, cancer_type=cancer_types)
+          #png("radial_ex.png", units="in", width=5, heigh=5, res=400)
+          #ggplot(exprobs, aes(cancer_type, exprobs, fill=cancer_type))+geom_bar(width=1, stat="identity")+geom_text(x = 21, y = 0.2, label = "0.2")+geom_text(x = 21, y = 0.4, label = "0.4")+geom_text(x = 21, y = 0.6, label = "0.6")+coord_polar()+theme(legend.position="none", panel.background = element_rect(fill="white"), panel.grid=element_line(color="lightgrey"), axis.text.y = element_blank(), axis.title=element_blank(), axis.ticks.y=element_blank())
+          #dev.off()
 
-###########
-#GLASSO on new sim mat
+          #compared to null
+          #null<-lapply(1:1000, FUN=function(i){
+          #  indices=sample(1:dim(dat_c)[1], 61)
+          #  tmpprobs<-1-exp(-colSums(dat_c[indices,])/cancer_nums$n_tumor)
+          #  Gini(tmpprobs)
+          #  })
 
-try<-huge.glasso(s, lambda.min.ratio=0.05, nlambda=30)
-try$path[[6]] %>% huge.plot()
-exprobs<-1-exp(-colSums(dat_c[which(rownames(dat_c) %in% rownames(adj)[which(rowSums(try$path[[10]])!=0)]),])/cancer_nums$n_tumor)
-
-
-rowSums(s[which(rowSums(try$path[[6]])!=0), which(rowSums(try$path[[6]])!=0)]>0.5)
+          #png("null_gini.png", units="in", width=5, heigh=5, res=400)
+          #hist(unlist(null), xlim=c(0,1), main=NULL, xlab="Gini")
+          #abline(v=Gini(exprobs), col="red", lty="dashed")
+          #dev.off()
+          indices=which(glasso_list$sparsity!=0)
+          for(i in 1:length(indices)){
+            genes<-rownames(s)[which(rowSums(glasso_list$path[[indices[i]]])!=0)]
+            output_list[[proj]][i]<-list(genes)
+          }
+  }
+output_list
+}
+  
 ```
 
 ### Plot showing sparseness of mutation
+
 ```{r}
 tot_samps<-length(unique(tcga_nh$patient_id))
 p<-tcga_nh %>% group_by(Hugo_Symbol) %>% summarize(n()/tot_samps)
 colnames(p)<-c("Gene", "Mutfreq")
 
 ggplot(p)+geom_histogram(aes(x=Mutfreq, fill=ifelse(Mutfreq>0.03, TRUE, FALSE)))+scale_fill_manual(values=c("black", "red"))+scale_x_continuous(trans="log10")+theme_bw()+ylab("Count")+xlab("Mutation frequency (# mutations/total samples)")+geom_vline(xintercept=0.03, linetype="dashed", color="red", size=1)+theme(legend.position="none")
+```
+
+### Known drivers
+
+```{r}
+drivers<-read.csv("./Cancer Driver Catalogues/COSMIC Census_allTue Jan  5 22_53_51 2021.csv")
+
+data(tcga)
+
+  message("Initializing dummy vectors")
+  dummy_exp=1
+  dummies<-matrix(ncol=32, nrow=0)
+  if(dummy_exp==1){
+    dummies<-f.roland(n=32, m=1)
+  }
+  if(dummy_exp>1){
+      for(i in 1:dummy_exp){
+      dummies<-rbind(dummies, f.roland(n=32, m=i))
+    }
+  }
+
+  cols<-c()
+  for(i in 1:dim(dummies)[1]){
+    cols<-c(cols, paste(cancer_nums$Cancer_Code[which(dummies[i,]==1)], collapse="_"))
+  }
+
+message("Loading data")
+  tcga_nh <- data.table::setDT(tcga) %>% filter(MS=="Non-hypermutated")
+  num_samps<-length(unique(tcga_nh$patient_id))
+
+  tcga_v_f <- tcga_nh[
+    # filter out all hypermutated tumors
+    # & tumors with unknown cancer
+    MS=="Non-hypermutated" & !is.na(Cancer_Code),
+    ][, # variant frequencies by gene, cancer type
+      # also save n_tumor per cancer
+      n_tumor := length(unique(patient_id)),
+      by = .(Cancer_Code)][,
+                          .(v_f = length(unique(patient_id)), n_tumor = n_tumor[1]),
+                          by = .(Variant, Hugo_Symbol, Cancer_Code)
+                          ]
+  
+  #only return singletons and drivers
+  tcga_v_f<- tcga_v_f %>% filter(v_f==1)
+  
+  driv<-drivers$Gene.Symbol[which(drivers$Gene.Symbol %in% tcga_v_f$Hugo_Symbol)]
+  
+  tcga_v_f <- tcga_v_f %>% filter(Hugo_Symbol %in% driv)
+
+  cancer_nums<-tcga_v_f %>% dplyr::select(Cancer_Code, n_tumor) %>% distinct()
+  cancer_nums<-cancer_nums[order(cancer_nums$Cancer_Code),]
+  cancer_types<-cancer_nums$Cancer_Code %>% unique()
+
+### matrix of mutation counts per tiss. type
+  message("Calculating mutation frequencies")
+  dat_c<-suppressMessages(tcga_v_f           %>%
+    dcast(
+      Hugo_Symbol ~ Cancer_Code,
+      value.var = "v_f",
+      fill = 0
+    ) %>%
+    magrittr::set_rownames(.$Hugo_Symbol) %>%
+    .[, Hugo_Symbol := NULL] %>%
+    data.matrix())
+  
+  dat_c<-dat_c[rowSums(dat_c)>0,]
+  
+  ### scale by number of tumors per cancer type
+  dat<-matrix(ncol=32, nrow=dim(dat_c)[1])
+  for(i in 1:dim(dat_c)[1]){
+    dat[i,]<-1-exp(-dat_c[i,]/(cancer_nums$n_tumor+1))
+  }
+  rownames(dat)<-rownames(dat_c)
+  colnames(dat)<-colnames(dat_c)
+  
+  cancer_probs<-cancer_nums$n_tumor/num_samps
+  
+  message("Calculating similarities... this may take a second")
+  mat_of_mut_sims<-outer(FUN=Vectorize(function(X, Y){cosine_dist(dummies[Y,], dat[X,], testNA=FALSE)}), X=1:dim(dat)[1], Y=1:dim(dummies)[1])
+  
+  #null ginis
+  null<-list()
+  for(i in 1:100){
+  indices=replicate(1000, sample(1:dim(dat_c)[1], i))
+  if(i==1){
+    tmpprobs<-lapply(1:length(indices), FUN=function(j){1-exp(-sum(dat_c[indices[j],])/cancer_nums$n_tumor)})
+  }
+  if(i!=1){
+    tmpprobs<-lapply(1:dim(indices)[2], FUN=function(j){1-exp(-colSums(dat_c[indices[,j],])/cancer_nums$n_tumor)})
+  }
+  null[[i]]<-unlist(lapply(tmpprobs, Gini))
+  }
+  
+  rownames(mat_of_mut_sims)<-driv
+  
+  ginis<-list()
+  for(i in 1:dim(mat_of_mut_sims)[2]){
+    vec<-sort(mat_of_mut_sims[,i], decreasing=TRUE)
+    tmp<-c()
+    for(j in 1:50){
+      if(j==1){v<-1-exp(-dat_c[which(rownames(dat_c)==names(vec[1:j])),]/cancer_nums$n_tumor)}
+      if(j!=1){v<-1-exp(-colSums(dat_c[which(rownames(dat_c) %in% names(vec[1:j])),]/cancer_nums$n_tumor))}
+      tmp<-c(tmp, Gini(v))
+    }
+    ginis[[i]]<-tmp
+  }
+  
+lapply(null, quantile, 0.999) %>% unlist() %>% plot(type="l")
+points(rep(1:50, 32), unlist(ginis), col="blue", type="p")
+```
+
+
+###run new approach
+```{r}
+mgenes_collection<-new_sim_mat(dummy_exp=1, relevance_thresh=0.75, alpha=1, beta=1)
+```
+
+### fit a model?
+```{r}
+library(msgl)
+
+########
+#reduced model
+
+reduced_names<-tcga_nh %>% group_by(Hugo_Symbol) %>% summarize("freq"=n()/tot_samps) %>% filter(freq>=0.03) %>% select(Hugo_Symbol) %>% c() %>% unlist()
+
+reduced_features<-matrix(ncol=32, nrow=0)
+  for(i in 1:45){
+  reduced_features<-rbind(reduced_features, 1-exp(-dat_c[which(rownames(dat_c) %in% x[i]),]/(cancer_nums$n_tumor+1)))
+  }
+rownames(reduced_features)<-reduced_names
+
+#data(PrimaryCancers)
+
+# A quick look at the data
+#dim(x)
+#table(classes)
+
+# A smaller subset with three classes 
+#small <- which(classes %in% c("CCA", "CRC", "Pancreas"))
+#classes <- classes[small, drop = TRUE]
+#x <- x[small, ]
+
+#Do cross validation using 2 parallel units
+#cl <- makeCluster(2)
+#registerDoParallel(cl)
+
+# Do 4-fold cross validation on a lambda sequence of length 100.
+# The sequence is decreasing from the data derived lambda.max to 0.2*lambda.max
+fit.cv <- msgl::cv(t(reduced_features)[1:3,], colnames(reduced_features)[1:3], fold = 2, lambda = 1E-10, alpha=1, use_parallel = FALSE)
+
+#stopCluster(cl)
+
+# Print information about models
+# and cross validation errors (estimated expected generalization error)
+fit.cv
+
+####
 ```
 
