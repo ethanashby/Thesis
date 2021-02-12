@@ -95,7 +95,9 @@ colnames(GT_probs)<-sort(unique(tcga_v_f$Cancer_Code))
 
 library(RColorBrewer)
 coul<- colorRampPalette(brewer.pal(20, "YlOrRd"))(25)
-heatmap(GT_probs, Rowv=TRUE, Colv=NA, col=coul)
+png("path_heatmap.png", units="in", width=8, height=8, res=300)
+heatmap(GT_probs, Rowv=TRUE, Colv=NA, col=coul, scale="row", labRow=FALSE)
+dev.off()
 
 nmis<-calc_minfo(GT_probs, cancer_prob=cancer_probs, normalize=TRUE)
 
@@ -103,23 +105,22 @@ nmis<-calc_minfo(GT_probs, cancer_prob=cancer_probs, normalize=TRUE)
 #########
 #PCA
 ########
-library(factoextra)
-pca<-prcomp(GT_probs, scale = TRUE, center=TRUE)
-fviz_eig(pca)
+#library(factoextra)
+#pca<-prcomp(GT_probs, scale = TRUE, center=TRUE)
+#viz_eig(pca)
 
-cbind(pca$x[,1:2], nmis) %>% as.data.frame() %>% ggplot(aes(x=PC1, y=PC2, color=nmis))+geom_point()+scale_color_gradient(low="blue", high="red")+ggtitle("PCA of GT vectors")
-fviz_pca_ind(pca,
-             col.ind = "cos2", # Color by the quality of representation
-             geom="point",
-             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
-             repel = FALSE     # Avoid text overlapping,
-             )+ggtitle("PCA of GT vectors")
+#cbind(pca$x[,1:2], nmis) %>% as.data.frame() %>% ggplot(aes(x=PC1, y=PC2, color=nmis))+geom_point()+scale_color_gradient(low="blue", high="red")+ggtitle("PCA of GT vectors")
+#fviz_pca_ind(pca,
+#             col.ind = "cos2", # Color by the quality of representation
+#             geom="point",
+#             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+#             repel = FALSE     # Avoid text overlapping,
+#             )+ggtitle("PCA of GT vectors")
 
 #bubbleplot
 
-GT_probs[which(rownames(GT_probs) %in% names(head(sort(nmis, decreasing = TRUE), 40))),] %>% melt() %>% ggplot(aes(x=Var2, y=Var1, size=value, color=value))+geom_point()+theme_dark()+theme(legend.position="none", axis.text.x=element_text(angle=90))+scale_color_gradient2(low="gold", midpoint=0.5, mid="orange", high="red")+scale_y_discrete(label=function(x) abbreviate(x, minlength = 10))
+#GT_probs[which(rownames(GT_probs) %in% names(head(sort(nmis, decreasing = TRUE), 40))),] %>% melt() %>% ggplot(aes(x=Var2, y=Var1, size=value, color=value))+geom_point()+theme_dark()+theme(legend.position="none", axis.text.x=element_text(angle=90))+scale_color_gradient2(low="gold", midpoint=0.5, mid="orange", high="red")+scale_y_discrete(label=function(x) abbreviate(x, minlength = 10))
     
-
 ###################
 #compare mutation frequency in genes per tumor vs pathway
 
@@ -152,7 +153,6 @@ tmp_plot<-lapply(1:length(pathways), FUN=function(i){
 tmp_plot<-do.call("rbind", tmp_plot)
 
 tmp_plot %>% group_by(patient_id, Cancer_Code) %>% dplyr::summarize('Num-path'=length(unique(Hugo_Symbol))) %>% ggplot(aes(x=Cancer_Code, y=`Num-path`, fill=Cancer_Code))+geom_violin()+theme_bw()+scale_y_continuous(trans="log10")+theme(axis.text.x = element_text(angle=90), legend.position="none", panel.grid=element_blank(), axis.title.x = element_blank())+ylab("Number of mutated pathways")
-
 ```
 
 ```{r}
