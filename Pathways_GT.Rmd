@@ -1,0 +1,293 @@
+---
+title: "Pathways"
+author: "Ethan Ashby"
+date: "2/4/2021"
+output: html_document
+---
+
+```{r}
+library(variantprobs)
+library(tidyverse)
+library(data.table)
+library(SAMBAR)
+library(gplots)
+source("calc_minfo copy.R")
+`%!in%` = Negate(`%in%`)
+foo<-function(){}
+tcga<-variantprobs::tcga
+```
+
+```{r}
+set.seed(11)
+
+min.pathway.size=3
+
+#load canonical pathways, all cancer neighborhood/modules, all oncogenic signature gene sets, and all cell type signature gene sets
+bin<-SAMBAR::convertgmt("./Pathways/c2.cp.v7.2.symbols.gmt", cagenes=SAMBAR::genes)
+bin1<-SAMBAR::convertgmt("./Pathways/c4.all.v7.2.symbols.gmt", cagenes=SAMBAR::genes)
+bin2<-SAMBAR::convertgmt("./Pathways/c6.all.v7.2.symbols.gmt", cagenes=SAMBAR::genes)
+bin3<-SAMBAR::convertgmt("./Pathways/c8.all.v7.2.symbols.gmt", cagenes=SAMBAR::genes)
+
+#list of pathway genes
+path_list<-lapply(list(bin, bin1, bin2, bin3), FUN=function(b){
+path_list<-list()
+for(i in 1:dim(b)[1]){
+  path_list[[i]]<-names(which(b[i,]==1))
+}
+names(path_list)<-rownames(b)
+return(path_list)
+})
+
+path_list<-append(append(append(path_list[[1]], path_list[[2]]), path_list[[3]]), path_list[[4]])
+
+#distribution of pathway sizes
+ggplot(data=NULL, aes(x=lapply(path_list, length) %>% unlist(), y=..count..))+geom_histogram(binwidth=1)+xlab("Pathway size")+ylab("Frequency")+theme_bw()
+ggplot(data=NULL, aes(x=lapply(path_list, length) %>% unlist(), y=..count..))+geom_histogram(binwidth=1)+scale_x_continuous(trans="sqrt")+xlab("Pathway size")+ylab("Frequency")+theme_bw()
+
+pathways<-path_list[which(lapply(path_list, length)>min.pathway.size)]
+
+tcga_v_f <- suppressWarnings(tcga[
+    # filter out all hypermutated tumors
+    # & tumors with unknown cancer
+    MS %in% c("Non-hypermutated", "APOBEC (2, 13)", "Smoking (4)", "MMR (6, 15, 20, 26)")  & !is.na(Cancer_Code),
+    ][, # variant frequencies by gene, cancer type
+      # also save n_tumor per cancer
+      n_tumor := length(unique(patient_id)),
+      by = .(Cancer_Code)][,
+                          .(v_f = length(unique(patient_id)), n_tumor = n_tumor[1]),
+                          by = .(Variant, Hugo_Symbol, Cancer_Code)
+                          ])
+
+tcga_v_f$Cancer_Code<-factor(tcga_v_f$Cancer_Code, levels=sort(unique(tcga_v_f$Cancer_Code)))
+
+cancer_probs<-tcga_v_f %>% select(Cancer_Code, n_tumor) %>% distinct() %>% arrange(.$Cancer_Code) %>% summarize(n_tumor/sum(n_tumor)) %>% unlist()
+names(cancer_probs)<-sort(unique(tcga_v_f$Cancer_Code))
+
+#calculating GT probs for our pathways!!!
+GT_probs<-lapply(1:length(pathways), FUN=function(i){
+  if(i%%100==0){print(i)}
+  genes_of_interest<-pathways[[i]]
+  tmp<-tcga_v_f[Hugo_Symbol %in% genes_of_interest,]
+  tmp$Hugo_Symbol<-names(pathways[i])
+  tmp$Cancer_Code<-factor(tmp$Cancer_Code, levels=sort(unique(tcga_v_f$Cancer_Code)))
+  GT_probs_tmp=suppressMessages(suppressWarnings(tmp[,
+      .(GT=goodturing_probs(v_f, m=n_tumor[1])[1]),
+      by=.(Cancer_Code)
+      ]))
+  
+  GT_probs_tmp_1<-suppressMessages(GT_probs_tmp          %>%
+    dcast(
+      GT ~ Cancer_Code,
+      value.var = "GT",
+      fill = 0,
+      drop=FALSE
+    ) %>%
+    .[, GT := NULL] %>%
+    data.matrix()) %>% colSums()
+  
+  GT_probs_tmp_1
+})
+
+GT_probs<-do.call("rbind", GT_probs)
+
+rownames(GT_probs)<-names(pathways)
+colnames(GT_probs)<-sort(unique(tcga_v_f$Cancer_Code))
+
+library(RColorBrewer)
+coul<- colorRampPalette(brewer.pal(20, "YlOrRd"))(25)
+heatmap(GT_probs, Rowv=TRUE, Colv=NA, col=coul)
+
+nmis<-calc_minfo(GT_probs, cancer_prob=cancer_probs, normalize=TRUE)
+
+
+#########
+#PCA
+########
+library(factoextra)
+pca<-prcomp(GT_probs, scale = TRUE, center=TRUE)
+fviz_eig(pca)
+
+cbind(pca$x[,1:2], nmis) %>% as.data.frame() %>% ggplot(aes(x=PC1, y=PC2, color=nmis))+geom_point()+scale_color_gradient(low="blue", high="red")+ggtitle("PCA of GT vectors")
+fviz_pca_ind(pca,
+             col.ind = "cos2", # Color by the quality of representation
+             geom="point",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = FALSE     # Avoid text overlapping,
+             )+ggtitle("PCA of GT vectors")
+
+#bubbleplot
+
+GT_probs[which(rownames(GT_probs) %in% names(head(sort(nmis, decreasing = TRUE), 40))),] %>% melt() %>% ggplot(aes(x=Var2, y=Var1, size=value, color=value))+geom_point()+theme_dark()+theme(legend.position="none", axis.text.x=element_text(angle=90))+scale_color_gradient2(low="gold", midpoint=0.5, mid="orange", high="red")+scale_y_discrete(label=function(x) abbreviate(x, minlength = 10))
+    
+
+###################
+#compare mutation frequency in genes per tumor vs pathway
+
+tcga_v_f <- suppressWarnings(tcga[
+    # filter out all hypermutated tumors
+    # & tumors with unknown cancer
+    MS %in% c("Non-hypermutated", "APOBEC (2, 13)", "Smoking (4)", "MMR (6, 15, 20, 26)")  & !is.na(Cancer_Code),
+    ][, # variant frequencies by gene, cancer type
+      # also save n_tumor per cancer
+      n_tumor := length(unique(patient_id)),
+      by = .(Cancer_Code)][,
+                          .(v_f = length(unique(patient_id)), n_tumor = n_tumor[1]),
+                          by = .(Variant, Hugo_Symbol, Cancer_Code)
+                          ])
+
+tcga[MS %in% c("Non-hypermutated", "APOBEC (2, 13)", "Smoking (4)", "MMR (6, 15, 20, 26)")  & !is.na(Cancer_Code),
+] %>% group_by(patient_id, Cancer_Code) %>% dplyr::summarize('Num-genes'=length(unique(Hugo_Symbol))) %>% ggplot(aes(x=Cancer_Code, y=`Num-genes`, fill=Cancer_Code))+geom_violin()+theme_bw()+scale_y_continuous(trans="log10")+theme(axis.text.x = element_text(angle=90), legend.position="none", panel.grid=element_blank(), axis.title.x = element_blank())+ylab("Number of mutated genes")
+
+a<-tcga[MS %in% c("Non-hypermutated", "APOBEC (2, 13)", "Smoking (4)", "MMR (6, 15, 20, 26)")  & !is.na(Cancer_Code),
+]
+
+tmp_plot<-lapply(1:length(pathways), FUN=function(i){
+  if(i %% 100 ==0){print(i)}
+  genes_of_interest<-pathways[[i]]
+  tmp<-a[Hugo_Symbol %in% genes_of_interest,]
+  tmp$Hugo_Symbol<-names(pathways[i])
+  tmp
+})
+
+tmp_plot<-do.call("rbind", tmp_plot)
+
+tmp_plot %>% group_by(patient_id, Cancer_Code) %>% dplyr::summarize('Num-path'=length(unique(Hugo_Symbol))) %>% ggplot(aes(x=Cancer_Code, y=`Num-path`, fill=Cancer_Code))+geom_violin()+theme_bw()+scale_y_continuous(trans="log10")+theme(axis.text.x = element_text(angle=90), legend.position="none", panel.grid=element_blank(), axis.title.x = element_blank())+ylab("Number of mutated pathways")
+
+```
+
+```{r}
+###############################
+#Null values for same pathways when we permute tissue labels per tumor
+
+set.seed(11)
+
+setDTthreads(0)
+
+tcga_samp<-tcga[
+    # filter out all hypermutated tumors
+    # & tumors with unknown cancer
+    MS %in% c("Non-hypermutated", "APOBEC (2, 13)", "Smoking (4)", "MMR (6, 15, 20, 26)")  & !is.na(Cancer_Code),
+    ] %>% select(patient_id, Cancer_Code) %>% distinct()
+
+tcga_null<-tcga
+
+tcga_null<-lapply(1:length(pathways), FUN=function(i){
+  tmp<-tcga_null[Hugo_Symbol %in% pathways[[i]],]
+  tmp$Hugo_Symbol<-names(pathways[i])
+  tmp})
+tcga_null<-do.call("rbind", tcga_null)
+
+############
+#crank out null iterations
+
+null_nmis<-mclapply(1:1000, FUN=function(i){
+  #scramble tissue labels associated with each tumor
+
+  tcga_samp$Cancer_Code<-sample(tcga_samp$Cancer_Code, replace=FALSE)
+
+  tcga_p<-left_join(tcga_null[MS %in% c("Non-hypermutated", "APOBEC (2, 13)", "Smoking (4)", "MMR (6, 15, 20, 26)")  & !is.na(Cancer_Code),][,c(1,2,3)], tcga_samp, by='patient_id')
+  
+  tcga_v_f_p<-suppressWarnings(tcga_p[, # variant frequencies by gene, cancer type
+      # also save n_tumor per cancer
+      n_tumor := length(unique(patient_id)),
+      by = .(Cancer_Code)][,
+                          .(v_f = length(unique(patient_id)), Hugo_Symbol=Hugo_Symbol[1], n_tumor = n_tumor[1]),
+                          by = .(Variant, Cancer_Code)
+                          ])
+  
+#calc GT probs
+
+GT_probs_perm=suppressMessages(suppressWarnings(tcga_v_f_p[,
+      .(GT=goodturing_probs(v_f, m=n_tumor[1])[1]),
+      by=.(Hugo_Symbol, Cancer_Code)
+      ]))
+
+GT_probs_1_perm<-suppressMessages(GT_probs_perm          %>%
+    dcast(
+      Hugo_Symbol ~ Cancer_Code,
+      value.var = "GT",
+      fill = 0,
+      drop=FALSE
+    ) %>%
+    magrittr::set_rownames(.$Hugo_Symbol) %>%
+    .[, Hugo_Symbol := NULL] %>%
+    data.matrix())
+  
+  calc_minfo(GT_probs_1_perm, cancer_prob=cancer_probs, normalize=TRUE)}, mc.cores = 8)
+
+#null_nmis %>% unlist() %>% hist()
+
+#NMI plots
+
+ggplot(data.frame(Val=nmis))+geom_histogram(mapping=aes(x=Val, y=..count../sum(..count..), fill="dodgerblue", alpha=0.5))+theme_bw()+geom_vline(xintercept=quantile(unlist(null_nmis), 0.99), col="black", lty=2)+geom_histogram(data=data.frame(Val=unlist(null_nmis)), mapping=aes(x=Val, y=..count../sum(..count..), fill="darkorange", alpha=0.5))+scale_x_continuous(trans="log10")+theme(legend.position = "none")+ylab("Relative Frequency")+xlab("NMI (log-scale)")
+
+#data.frame(Val=nmis) %>% ggplot()+geom_histogram(mapping=aes(x=Val, y=..count../sum(..count..)), fill="dodgerblue")+geom_vline(xintercept=quantile(unlist(null_nmis), 0.99), col="black", lty=2)+theme_bw()
+```
+
+```{r}
+############
+#compare nmis to random groupings (no tiss. label permuting)
+set.seed(11)
+
+sizes<-lapply(pathways, length) %>% unlist() %>% unique()
+
+rand_groups<-mclapply(1:100, FUN=function(j){
+  samps<-lapply(seq(3, 406, by=20), FUN=function(i){sample(SAMBAR::genes, i)})
+  tcga_v_f <- suppressWarnings(tcga[
+    # filter out all hypermutated tumors
+    # & tumors with unknown cancer
+    MS %in% c("Non-hypermutated", "APOBEC (2, 13)", "Smoking (4)", "MMR (6, 15, 20, 26)")  & !is.na(Cancer_Code),
+    ][, # variant frequencies by gene, cancer type
+      # also save n_tumor per cancer
+      n_tumor := length(unique(patient_id)),
+      by = .(Cancer_Code)][,
+                          .(v_f = length(unique(patient_id)), n_tumor = n_tumor[1]),
+                          by = .(Variant, Hugo_Symbol, Cancer_Code)
+                          ])
+
+  tcga_null<-lapply(1:length(samps), FUN=function(i){
+    tmp<-tcga_v_f[Hugo_Symbol %in% samps[[i]],]
+    tmp$Hugo_Symbol<-paste("Mgene", seq(3, 406, by=20)[i])
+    tmp})
+tcga_null<-do.call("rbind", tcga_null)
+
+  GT_probs_perm=suppressMessages(suppressWarnings(tcga_null[,
+      .(GT=goodturing_probs(v_f, m=n_tumor[1])[1]),
+      by=.(Hugo_Symbol, Cancer_Code)
+      ]))
+
+  GT_probs_1_perm<-suppressMessages(GT_probs_perm          %>%
+    dcast(
+      Hugo_Symbol ~ Cancer_Code,
+      value.var = "GT",
+      fill = 0,
+      drop=FALSE
+    ) %>%
+    magrittr::set_rownames(.$Hugo_Symbol) %>%
+    .[, Hugo_Symbol := NULL] %>%
+    data.matrix())
+  
+    calc_minfo(GT_probs_1_perm, cancer_prob=cancer_probs, normalize=TRUE) %>% sort()}, mc.cores=8)
+
+rand_groups<-do.call("rbind", rand_groups)
+
+quants<-lapply(1:dim(rand_groups)[2], FUN=function(i) quantile(rand_groups[,i],0.99)) %>% unlist()
+ggplot(data=NULL, aes(x=seq(3, 406, by=20), y=quants))+geom_line(color="blue")+geom_point(data=NULL, aes(data=NULL, x=unlist(lapply(pathways, length)), y=nmis), alpha=0.2)+theme_bw()+scale_x_continuous(trans="log10")
+```
+
+```{r}
+#TMB vector
+scalar1<-function(x){x/sqrt(sum(x^2))}
+TMB_vec<-tcga_v_f %>% dplyr::group_by(Cancer_Code) %>% dplyr::summarize(TMB=sum(v_f)/n_tumor[1]) %>% .$TMB %>% scalar1()
+#names(TMB_vec)<-cancer_nums$Cancer_Code
+#barplot(TMB_vec)
+
+TMB_breakers<-names(nmis[which(lapply(1:dim(GT_probs)[1], FUN=function(i) cor(TMB_vec, GT_probs[i,])) %>% unlist() < 0.5)])
+GT_probs[which(rownames(GT_probs) %in% TMB_breakers),] %>% melt() %>% ggplot(aes(x=Var2, y=Var1, size=value, color=value))+geom_point()+theme_dark()+theme(legend.position="none", axis.text.x=element_text(angle=90))+scale_color_gradient2(low="gold", midpoint=0.5, mid="orange", high="red")+scale_y_discrete(label=function(x) abbreviate(x, minlength = 10))
+
+#library(NMF)
+#rank_est<-NMF::nmfEstimateRank(GT_probs, range = 3:10)
+#try<-nmf(GT_probs, rank=5)
+
+```
+
