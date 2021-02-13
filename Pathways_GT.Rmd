@@ -12,6 +12,7 @@ library(data.table)
 library(SAMBAR)
 library(gplots)
 source("calc_minfo copy.R")
+library(scales)
 `%!in%` = Negate(`%in%`)
 foo<-function(){}
 tcga<-variantprobs::tcga
@@ -101,7 +102,6 @@ dev.off()
 
 nmis<-calc_minfo(GT_probs, cancer_prob=cancer_probs, normalize=TRUE)
 
-
 #########
 #PCA
 ########
@@ -136,11 +136,12 @@ tcga_v_f <- suppressWarnings(tcga[
                           by = .(Variant, Hugo_Symbol, Cancer_Code)
                           ])
 
-tcga[MS %in% c("Non-hypermutated", "APOBEC (2, 13)", "Smoking (4)", "MMR (6, 15, 20, 26)")  & !is.na(Cancer_Code),
-] %>% group_by(patient_id, Cancer_Code) %>% dplyr::summarize('Num-genes'=length(unique(Hugo_Symbol))) %>% ggplot(aes(x=Cancer_Code, y=`Num-genes`, fill=Cancer_Code))+geom_violin()+theme_bw()+scale_y_continuous(trans="log10")+theme(axis.text.x = element_text(angle=90), legend.position="none", panel.grid=element_blank(), axis.title.x = element_blank())+ylab("Number of mutated genes")
+#tcga[MS %in% c("Non-hypermutated", "APOBEC (2, 13)", "Smoking (4)", "MMR (6, 15, 20, 26)")  & !is.na(Cancer_Code),
+#] %>% group_by(patient_id, Cancer_Code) %>% #dplyr::summarize('Num-genes'=length(unique(Hugo_Symbol))) %>% ggplot(aes(x=Cancer_Code, y=`Num-genes`, fill=Cancer_Code))+geom_violin()+theme_bw()+scale_y_continuous(trans="log10")+theme(axis.text.x = element_text(angle=90), legend.position="none", panel.grid=element_blank(), axis.title.x = element_blank())+ylab("Number of mutated genes")
 
 a<-tcga[MS %in% c("Non-hypermutated", "APOBEC (2, 13)", "Smoking (4)", "MMR (6, 15, 20, 26)")  & !is.na(Cancer_Code),
 ]
+a$patient_id<-factor(a$patient_id, levels=unique(a$patient_id))
 
 tmp_plot<-lapply(1:length(pathways), FUN=function(i){
   if(i %% 100 ==0){print(i)}
@@ -152,7 +153,15 @@ tmp_plot<-lapply(1:length(pathways), FUN=function(i){
 
 tmp_plot<-do.call("rbind", tmp_plot)
 
-tmp_plot %>% group_by(patient_id, Cancer_Code) %>% dplyr::summarize('Num-path'=length(unique(Hugo_Symbol))) %>% ggplot(aes(x=Cancer_Code, y=`Num-path`, fill=Cancer_Code))+geom_violin()+theme_bw()+scale_y_continuous(trans="log10")+theme(axis.text.x = element_text(angle=90), legend.position="none", panel.grid=element_blank(), axis.title.x = element_blank())+ylab("Number of mutated pathways")
+#tmp_plot %>% group_by(patient_id, Cancer_Code) %>% dplyr::summarize('Num-path'=length(unique(Hugo_Symbol))) %>% ggplot(aes(x=Cancer_Code, y=`Num-path`, fill=Cancer_Code))+geom_violin()+theme_bw()+scale_y_continuous(trans="log10")+theme(axis.text.x = element_text(angle=90), legend.position="none", panel.grid=element_blank(), axis.title.x = element_blank())+ylab("Number of mutated pathways")
+
+tmp_plot_genes<-a[Hugo_Symbol %in% SAMBAR::genes,] %>% dplyr::group_by(patient_id, Cancer_Code, .drop=FALSE) %>% dplyr::summarize('Num-genes'=length(unique(Hugo_Symbol))) %>% cbind(. , Lev="Gene")
+
+tmp_plot_pathways<-tmp_plot[!is.na(Cancer_Code),] %>% dplyr::group_by(patient_id, Cancer_Code, .drop=FALSE) %>% dplyr::summarize('Num-genes'=length(unique(Hugo_Symbol))) %>% cbind(. , Lev="Pathway")
+
+png("desparse_plot.png", units="in", width=8, height=5, res=300)
+rbind(tmp_plot_genes, tmp_plot_pathways) %>% filter(!is.na(Cancer_Code)) %>% ggplot(aes(x=Cancer_Code, y=`Num-genes`, fill=Cancer_Code))+geom_violin()+theme_bw()+scale_y_continuous(trans=scales::pseudo_log_trans(base = 10), breaks = c(1, 10, 100, 1000, 10000))+theme(axis.text.x = element_text(angle=90), legend.position="none", panel.grid=element_blank(), axis.title.x = element_blank())+ylab("Number of mutated features per tumor")+facet_grid(rows=vars(Lev), cols=NULL)
+dev.off()
 ```
 
 ```{r}
@@ -282,12 +291,25 @@ TMB_vec<-tcga_v_f %>% dplyr::group_by(Cancer_Code) %>% dplyr::summarize(TMB=sum(
 #names(TMB_vec)<-cancer_nums$Cancer_Code
 #barplot(TMB_vec)
 
-TMB_breakers<-names(nmis[which(lapply(1:dim(GT_probs)[1], FUN=function(i) cor(TMB_vec, GT_probs[i,])) %>% unlist() < 0.5)])
+TMB_breakers<-names(nmis[which(lapply(1:dim(GT_probs)[1], FUN=function(i) cor(TMB_vec, GT_probs[i,])) %>% unlist() < 0.2)])
 GT_probs[which(rownames(GT_probs) %in% TMB_breakers),] %>% melt() %>% ggplot(aes(x=Var2, y=Var1, size=value, color=value))+geom_point()+theme_dark()+theme(legend.position="none", axis.text.x=element_text(angle=90))+scale_color_gradient2(low="gold", midpoint=0.5, mid="orange", high="red")+scale_y_discrete(label=function(x) abbreviate(x, minlength = 10))
 
-#library(NMF)
-#rank_est<-NMF::nmfEstimateRank(GT_probs, range = 3:10)
-#try<-nmf(GT_probs, rank=5)
+cors<-lapply(1:dim(GT_probs)[1], FUN=function(i) cor(TMB_vec, GT_probs[i,]))
+png("cors_with_TMB.png", units="in", width=7, height=5, res=300)
+ggplot()+geom_histogram(data=NULL, aes(x=unlist(cors), y=..count.., fill=unlist(cors)>quantile(unlist(cors), 0.05)), binwidth=0.01)+geom_vline(xintercept=quantile(unlist(cors), 0.05))+xlab("Correlations between Mut. Probs and TMB")+ylab("Frequency")+scale_fill_manual(values=c("red", "black"))+theme_minimal()+theme(legend.position='none')
+dev.off()
 
+
+###########
+#NMF
+##########
+
+library(NMF)
+rank_est<-nmf(GT_probs, 2:10, nrun=10)
+#try<-nmf(GT_probs, rank=7)
+
+try<-nmf(GT_probs, 6)
+#s <- extractFeatures(try, method="max") 
+#str(s)
 ```
 
