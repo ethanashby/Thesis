@@ -18,7 +18,6 @@ foo<-function(){}
 tcga<-variantprobs::tcga
 ```
 
-
 #At least one
 
 ##build paths, heatmap, desparse plot
@@ -300,7 +299,10 @@ TMB_vec<-tcga_v_f %>% dplyr::group_by(Cancer_Code) %>% dplyr::summarize(TMB=sum(
 #barplot(TMB_vec)
 
 TMB_breakers<-names(nmis[which(lapply(1:dim(GT_probs)[1], FUN=function(i) cor(TMB_vec, GT_probs[i,])) %>% unlist() < quantile(unlist(cors), 0.05))])
-GT_probs[which(rownames(GT_probs) %in% TMB_breakers),] %>% .[20:40,] %>% melt() %>% ggplot(aes(x=Var2, y=Var1, size=value, color=value))+geom_point()+theme_dark()+theme(legend.position="none", axis.text.x=element_text(angle=90))+scale_color_gradient2(low="gold", midpoint=0.5, mid="orange", high="red")+scale_y_discrete(label=function(x) abbreviate(x, minlength = 10))
+
+png("PMBG_bubb.png", units="in", width=8, height=8, res=350)
+GT_probs[which(rownames(GT_probs) %in% names(sort(nmis[which(names(nmis) %in% TMB_breakers)], decreasing=TRUE))[1:20]),] %>% melt() %>% ggplot(aes(x=Var2, y=Var1, size=value, color=Var1))+geom_point()+theme_minimal()+theme(legend.position="none", axis.text.x=element_text(angle=90), axis.title=element_blank())+scale_y_discrete(label=function(x) stringr::str_trunc(str_remove_all(x, "REACTOME_|WP_|BIOCARTA_|KEGG_"), 15))
+dev.off()
 
 cors<-lapply(1:dim(GT_probs)[1], FUN=function(i) cor(TMB_vec, GT_probs[i,]))
 png("cors_with_TMB.png", units="in", width=7, height=5, res=300)
@@ -408,12 +410,14 @@ dev.off()
 #word cloud of pathways
 ###########
 
-#df$Pathway %>% str_replace_all("_", " ") %>% str_replace_all(c("REACTOME"="", "KEGG"="", "BIOCARTA"="", "MODULE"="","WP"="","MORF"="","PID"="","PATHWAY"="", "AND"="", "THE"="")) %>% paste(collapse=" ") %>% wordcloud::wordcloud(min.freq=4)
+df$Pathway %>% str_replace_all("_", " ") %>% str_replace_all(c("REACTOME"="", "KEGG"="", "BIOCARTA"="", "MODULE"="","WP"="","MORF"="","PID"="","PATHWAY"="", "AND"="", "THE"="")) %>% paste(collapse=" ") %>% wordcloud::wordcloud(min.freq=4)
 
 png("wordcloud_gene_membs.png", units="in", width=5.5, height=5.5, res=300)
 path_list[which(names(path_list) %in% names(nmis[which(names(nmis) %in% TMB_breakers & nmis>0.01)]))] %>% unlist() %>% paste(collapse=" ") %>% wordcloud::wordcloud()
 dev.off()
 ```
+
+
 
 #Single mut
 
@@ -456,7 +460,6 @@ dev.off()
 
 nmis<-calc_minfo(GT_probs_single, cancer_prob=cancer_probs, normalize=TRUE)
 
-
 ###find corr w/ TMB
 scalar1<-function(x){x/sqrt(sum(x^2))}
 TMB_vec<-tcga_v_f %>% dplyr::group_by(Cancer_Code) %>% dplyr::summarize(TMB=sum(v_f)/n_tumor[1]) %>% .$TMB %>% scalar1()
@@ -469,6 +472,77 @@ dev.off()
 
 ##null nmis and nmi comparison
 ```{r}
+set.seed(11)
 
+setDTthreads(0)
+
+tcga_samp<-tcga[
+    # filter out all hypermutated tumors
+    # & tumors with unknown cancer
+    MS %in% c("Non-hypermutated", "APOBEC (2, 13)", "Smoking (4)", "MMR (6, 15, 20, 26)")  & !is.na(Cancer_Code),
+    ] %>% select(patient_id, Cancer_Code) %>% distinct()
+
+tcga_null<-tcga
+
+tcga_null<-lapply(1:length(pathways), FUN=function(i){
+  tmp<-tcga_null[Hugo_Symbol %in% pathways[[i]],]
+  tmp$Hugo_Symbol<-names(pathways[i])
+  tmp})
+tcga_null<-do.call("rbind", tcga_null)
+
+############
+#crank out null iterations
+
+test<-function(i){
+  #scramble tissue labels associated with each tumor
+
+  tcga_samp$Cancer_Code<-sample(tcga_samp$Cancer_Code, replace=FALSE)
+
+  tcga_p<-left_join(tcga_null[MS %in% c("Non-hypermutated", "APOBEC (2, 13)", "Smoking (4)", "MMR (6, 15, 20, 26)")  & !is.na(Cancer_Code),][,c(1,2,3)], tcga_samp, by='patient_id')
+
+  
+  tcga_v_f_p<-suppressWarnings(tcga_p[, # variant frequencies by gene, cancer type
+      # also save n_tumor per cancer
+      n_tumor := length(unique(patient_id)),
+      by = .(Cancer_Code)][,
+                          .(v_f = length(unique(patient_id)), Hugo_Symbol=Hugo_Symbol[1], n_tumor = n_tumor[1]),
+                          by = .(Variant, Cancer_Code)
+                          ])
+  
+#calc GT probs
+
+GT_probs_perm=suppressMessages(suppressWarnings(tcga_v_f_p[,
+      .(GT=goodturing_probs(v_f, m=n_tumor[1])[2]),
+      by=.(Hugo_Symbol, Cancer_Code)
+      ]))
+
+GT_probs_1_perm<-suppressMessages(GT_probs_perm          %>%
+    dcast(
+      Hugo_Symbol ~ Cancer_Code,
+      value.var = "GT",
+      fill = 0,
+      drop=FALSE
+    ) %>%
+    magrittr::set_rownames(.$Hugo_Symbol) %>%
+    .[, Hugo_Symbol := NULL] %>%
+    data.matrix())
+  
+  calc_minfo(GT_probs_1_perm, cancer_prob=cancer_probs, normalize=TRUE)}
+
+null_nmis_sing<-mclapply(1:100, FUN=test, mc.cores = 8)
+
+to_plot_nmi<-data.frame("val"=c(unlist(null_nmis_sing), nmis), "id"=c(rep("Null", length(unlist(null_nmis_sing))), rep("True", length(nmis))))
+
+png("null_nmi_dist_single.png", units="in", width=7, height=5.5, res=300)
+ggplot()+geom_histogram(data=to_plot_nmi[which(to_plot_nmi$id=="Null"),], aes(x=val, y=stat(count)/sum(count)), fill="blue", alpha=0.5)+geom_histogram(data=to_plot_nmi[which(to_plot_nmi$id=="True"),], aes(x=val, y=stat(count)/sum(count)), fill="red", alpha=0.5)+theme_classic()+geom_vline(aes(xintercept=quantile(unlist(null_nmis_sing), 0.99)), lty=2)+theme(legend.position="none")+xlab("NMI")+ylab("Relative Frequency")
+dev.off()
+
+###bubbleplot
+
+GT_probs_single[which(nmis>quantile(unlist(null_nmis_sing), 0.99)),] %>% melt() %>% ggplot(aes(x=Var2, y=Var1, size=value, color=value))+geom_point()+scale_y_discrete(label=function(x) abbreviate(x, minlength = 16))+theme(legend.position="none", axis.text.x=element_text(angle=90))+scale_color_gradient2(low="gold", mid="orange", high="red")
+
+png("top10nmi_bubble_sing.png", units="in", width=8, height=6, res=300)
+GT_probs_single[which(rownames(GT_probs_single[which(nmis>quantile(unlist(null_nmis_sing), 0.99)),]) %in% names(sort(nmis, decreasing=TRUE))[1:10]),] %>% melt() %>% ggplot(aes(x=Var2, y=Var1, size=value, color=value))+geom_point()+scale_y_discrete(label=function(x) abbreviate(x, minlength = 16))+theme_minimal()+theme(legend.position="none", axis.text.x=element_text(angle=90), axis.title = element_blank())+scale_color_gradient2(low="gold", mid="orange", high="red")
+dev.off()
 ```
 
