@@ -372,27 +372,27 @@ tcga_v_f_test <- suppressWarnings(tcga[
 tcga_v_f_test<-tcga_v_f_test[Hugo_Symbol %in% SAMBAR::genes,]
 
   GT_probs_test<-lapply(1:length(groups), FUN=function(i){
-  if(i%%10==0){print(i)}
-  genes_of_interest<-groups[[i]]
-  tmp<-tcga_v_f_test[Hugo_Symbol %in% genes_of_interest,]
-  tmp$Hugo_Symbol<-paste("Mod", i, sep="_")
-  tmp$Cancer_Code<-factor(tmp$Cancer_Code, levels=sort(unique(tcga_v_f$Cancer_Code)))
-  GT_probs_tmp=suppressMessages(suppressWarnings(tmp[,
-      .(GT=goodturing_probs(v_f, m=n_tumor[1])[1]),
-      by=.(Cancer_Code)
-      ]))
+    if(i%%10==0){print(i)}
+    genes_of_interest<-groups[[i]]
+    tmp<-tcga_v_f_test[Hugo_Symbol %in% genes_of_interest,]
+    tmp$Hugo_Symbol<-paste("Mod", i, sep="_")
+    tmp$Cancer_Code<-factor(tmp$Cancer_Code, levels=sort(unique(tcga_v_f$Cancer_Code)))
+    GT_probs_tmp=suppressMessages(suppressWarnings(tmp[,
+        .(GT=goodturing_probs(v_f, m=n_tumor[1])[1]),
+        by=.(Cancer_Code)
+        ]))
   
-  GT_probs_tmp$Mod<-paste("Mod", i, sep="_")
+    GT_probs_tmp$Mod<-paste("Mod", i, sep="_")
   
-  GT_probs_tmp_1<-suppressMessages(GT_probs_tmp          %>%
-    dcast(
-      Mod ~ Cancer_Code,
-      value.var = "GT",
-      fill = 0,
-      drop=FALSE
-    ) %>% magrittr::set_rownames(.$Mod) %>%
-    .[, Mod := NULL] %>%
-    data.matrix())
+    GT_probs_tmp_1<-suppressMessages(GT_probs_tmp          %>%
+      dcast(
+        Mod ~ Cancer_Code,
+        value.var = "GT",
+        fill = 0,
+        drop=FALSE
+        ) %>% magrittr::set_rownames(.$Mod) %>%
+        .[, Mod := NULL] %>%
+        data.matrix())
   
   return(GT_probs_tmp_1)
 })
@@ -402,6 +402,7 @@ tcga_v_f_test<-tcga_v_f_test[Hugo_Symbol %in% SAMBAR::genes,]
 ############
 #compare
   
+  GT_probs_train<-GT_probs_train[,which(colSums(GT_probs_train)!=0)]
   trainprobs<-GT_probs_train %>% melt()
   colnames(trainprobs)<-c("Mod", "Cancer_Type", "x")
   testprobs<-GT_probs_test %>% melt()
@@ -414,6 +415,8 @@ tcga_v_f_test<-tcga_v_f_test[Hugo_Symbol %in% SAMBAR::genes,]
               color="red")+theme_minimal()+xlab("GT from Train")+ylab("GT from Test")
 
 
+  
+  
 ###########
 #true validation
   
@@ -423,13 +426,19 @@ to_filt<-tcga[
     MS %in% c("Non-hypermutated", "APOBEC (2, 13)", "Smoking (4)", "MMR (6, 15, 20, 26)")  & Cancer_Code %in% c("BLCA", "BRCA", "COADREAD", "GBM", "HNSC", "KIRC", "KIRP", "LGG", "LIHC", "LUAD", "LUSC", "OV", "PRAD", "STAD", "THCA", "UCEC")]
 to_filt$Cancer_Code<-factor(to_filt$Cancer_Code, levels=c("BLCA", "BRCA", "COADREAD", "GBM", "HNSC", "KIRC", "KIRP", "LGG", "LIHC", "LUAD", "LUSC", "OV", "PRAD", "STAD", "THCA", "UCEC"))
 
+denom<-suppressMessages(to_filt[patient_id %in% test_ids,] %>% group_by(Cancer_Code, .drop=FALSE) %>% summarize(denom=length(unique(patient_id))))
+
 valid_probs<-lapply(1:length(groups), FUN=function(i){
   if(i%%10==0){print(i)}
   genes_of_interest<-groups[[i]]
-  tmp <-  suppressMessages(to_filt[patient_id %in% test_ids & Hugo_Symbol %in% genes_of_interest & Variant %!in% tcga_v_f_train$Variant,
-    ] %>% group_by(Cancer_Code, .drop=FALSE) %>% summarize(num=length(unique(patient_id))))
-  denom<-suppressMessages(to_filt[patient_id %in% test_ids,] %>% group_by(Cancer_Code, .drop=FALSE) %>% summarize(denom=length(unique(patient_id))))
-  tmp$num/denom$denom
+  tmp_df<-data.frame(Cancer_Code=c("BLCA", "BRCA", "COADREAD", "GBM", "HNSC", "KIRC", "KIRP", "LGG", "LIHC", "LUAD", "LUSC", "OV", "PRAD", "STAD", "THCA", "UCEC"), num=rep(NA, 16))
+  for(j in 1:dim(tmp_df)[1]){
+  tmp<-to_filt[Cancer_Code==tmp_df[j,1],]
+  tmp<-tmp[patient_id %in% test_ids & Hugo_Symbol %in% genes_of_interest & Variant %!in% tcga_v_f_train[Cancer_Code==tmp_df[j,1]]$Variant,]
+  tmp<-length(unique(tmp$patient_id))
+  tmp_df[j,2] <-  tmp
+  }
+  return(tmp_df$num/denom$denom)
 })
 
 valid_probs<-do.call(rbind, valid_probs)
@@ -444,6 +453,30 @@ Lins<-epi.ccc(left_join(trainprobs, valid)$x, left_join(trainprobs, valid)$y)
 png("HCOMPC_valid.png", units="in", width=8, height=8, res=300)
 left_join(trainprobs, valid) %>% tibble() %>% ggplot(aes(x=x, y=y, color=Cancer_Type))+geom_point()+coord_fixed()+geom_abline(aes(intercept=0, slope=1))+annotate(geom="text", x=0.1, y=0.4, label=paste("Lin's CC: ", round(Lins$rho.c[1], 3)),
               color="red")+theme_minimal()+xlab("Estimated from Train")+ylab("Observed in Test")
+dev.off()
+
+
+########
+#facet plot
+
+Lins<-c()
+for(cancer in c("BLCA", "BRCA", "COADREAD", "GBM", "HNSC", "KIRC", "KIRP", "LGG", "LIHC", "LUAD", "LUSC", "OV", "PRAD", "STAD", "THCA", "UCEC")){
+  tmp<-left_join(trainprobs, valid) %>% dplyr::filter(.$Cancer_Type==cancer)
+  Lins<-c(Lins, epi.ccc(tmp %>% dplyr::select(x) %>% .$x, tmp %>% dplyr::select(y) %>% .$y)$rho.c[1])
+}
+Lins<-unlist(Lins)
+
+dat_text <- data.frame(
+  Cancer_Type = c("BLCA", "BRCA", "COADREAD", "GBM", "HNSC", "KIRC", "KIRP", "LGG", "LIHC", "LUAD", "LUSC", "OV", "PRAD", "STAD", "THCA", "UCEC"),
+  LCC   = Lins
+)
+
+png("HCOMPC_valid_facet.png", units="in", width=8, height=8, res=300)
+left_join(trainprobs, valid) %>% tibble() %>% ggplot(aes(x=x, y=y, color=Cancer_Type))+geom_point()+coord_fixed()+geom_abline(aes(intercept=0, slope=1))+theme_minimal()+xlab("Estimated from Train")+ylab("Observed in Test")+facet_wrap(~Cancer_Type)+ geom_text(
+  data    = dat_text,
+  mapping = aes(x = 0.15, y = 0.4, label = paste("LCC:", round(LCC, 2))),
+  cex=3
+)
 dev.off()
 ```
 
