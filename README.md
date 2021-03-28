@@ -1,2 +1,2 @@
 # Thesis
-Study of divergence metrics to aid in the clustering of genes by tissue specific unseen variant probabilities
+Data de-sparsification strategies to aid extraction of hitherto unseen variant signals from the cancer genome.
